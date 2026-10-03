@@ -21,6 +21,7 @@
   --szeryf: #d9ad3f;
   --town: #b9aec4;
   --power: #a597e6;
+  --story: #d98e6a;
   --font-display: "DM Serif Display", Georgia, "Times New Roman", serif;
   --font-body: "Manrope", system-ui, -apple-system, "Segoe UI", sans-serif;
   color-scheme: dark;
@@ -200,6 +201,13 @@ button:disabled { opacity: .4; cursor: not-allowed; }
 .power-card .note { font-size: .85rem; color: var(--muted); }
 .roster .p { display: block; font-size: .85rem; color: var(--power); }
 
+/* Backstory */
+.story-card { border-left: 3px solid var(--story); padding: 4px 0 4px 16px; display: flex; flex-direction: column; gap: 6px; }
+.story-card .eyebrow { color: var(--story); }
+.story-card .sname { font-family: var(--font-display); font-size: 1.6rem; line-height: 1.1; }
+.story-card .note { font-size: .85rem; color: var(--muted); }
+.roster .s { display: block; font-size: .85rem; color: var(--story); }
+
 /* Narrator list */
 .roster { list-style: none; margin: 0; padding: 0; }
 .roster li { display: flex; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); }
@@ -267,6 +275,40 @@ button:disabled { opacity: .4; cursor: not-allowed; }
   ];
   const POWER_BY_ID = Object.fromEntries(POWERS.map(c => [c.id, c]));
 
+  // Historie są neutralne wobec ról: mafia opowiada swoją tak samo jak mieszkańcy.
+  const STORIES = [
+    { t: "Emerytowany listonosz", d: "Przez 40 lat roznosiłeś listy w tym mieście. Znasz każdą skrzynkę pocztową i wiesz, kto dostaje dziwne paczki." },
+    { t: "Właścicielka piekarni", d: "Wstajesz o 3:00, żeby piec chleb. Widziałaś, kto wraca do domu nad ranem, ale nikomu nie mówiłaś." },
+    { t: "Nowy w mieście", d: "Przyjechałeś tydzień temu z dużego miasta. Nikt nie wie, czym się wcześniej zajmowałeś, a Ty nie lubisz o tym mówić." },
+    { t: "Lokalny hydraulik", d: "Byłeś w piwnicy prawie każdego domu. W jednej z nich znalazłeś coś, czego nie powinieneś był zobaczyć." },
+    { t: "Proboszcz parafii", d: "Słuchasz spowiedzi całego miasta. Tajemnica spowiedzi coraz bardziej Ci ciąży." },
+    { t: "Nauczycielka matematyki", d: "Uczyłaś połowę osób przy tym stole. Pamiętasz, kto ściągał na klasówkach." },
+    { t: "Barman z Pod Kogutem", d: "Nalewasz piwo od 20 lat. Ludzie po trzecim kuflu mówią Ci rzeczy, których nie powiedzieliby nikomu." },
+    { t: "Wnuczka burmistrza", d: "Wróciłaś ze studiów za granicą. Plotki mówią, że dziadek ma długi u niewłaściwych ludzi." },
+    { t: "Taksówkarz na nocnej zmianie", d: "Wozisz ludzi po nocach i nie zadajesz pytań. Ostatnio jeden kurs skończył się pod opuszczonym magazynem." },
+    { t: "Fryzjerka", d: "W Twoim salonie plotki krążą szybciej niż nożyczki. Wiesz, kto z kim się pokłócił w tym tygodniu." },
+    { t: "Weterynarz", d: "Leczysz psy i koty całego miasta. Wczoraj ktoś przyniósł psa z raną, która nie wyglądała na ugryzienie." },
+    { t: "Były bokser", d: "Kiedyś walczyłeś o mistrzostwo województwa. Teraz prowadzisz siłownię i spłacasz pożyczkę, o której wolisz nie mówić." },
+    { t: "Kwiaciarka", d: "Ktoś co tydzień zamawia u Ciebie wieniec pogrzebowy, zawsze dzień przed czyimś zniknięciem." },
+    { t: "Dziennikarz lokalnej gazety", d: "Od miesięcy piszesz artykuł o korupcji w mieście. Ktoś włamał się do Twojego biura i zabrał notatki." },
+    { t: "Ogrodnik z willi na wzgórzu", d: "Pracujesz dla najbogatszej rodziny w okolicy. Pod różami zakopano coś, co nie jest kompostem." },
+    { t: "Pielęgniarka z przychodni", d: "Masz dostęp do szafki z lekami. W zeszłym tygodniu kilku opakowań zabrakło, a Ty nie zgłosiłaś tego szefowi." },
+    { t: "Sprzedawca używanych aut", d: "Każde auto ma swoją historię. Jedno, które sprzedałeś miesiąc temu, miało w bagażniku dziurę po kuli." },
+    { t: "Organistka", d: "Grasz na każdym ślubie i pogrzebie. Ostatnio pogrzebów jest więcej niż ślubów i zaczyna Cię to niepokoić." },
+    { t: "Kierowca autobusu", d: "Codziennie tą samą trasą. Od tygodnia na przystanku przy cmentarzu wsiada ten sam człowiek w kapeluszu." },
+    { t: "Wędkarz z jeziora", d: "Spędzasz noce nad wodą. Trzy dni temu ktoś o północy wrzucił do jeziora ciężką torbę." },
+    { t: "Właściciel lombardu", d: "Ludzie przynoszą Ci rzeczy i nie pytasz, skąd je mają. Wczoraj ktoś zastawił zegarek z wygrawerowanym nazwiskiem zaginionego." },
+    { t: "Sołtyska", d: "Znasz wszystkich i wszystkich pilnujesz. Ostatnio ktoś podrzucił Ci anonim z groźbą." },
+    { t: "Student na wakacjach", d: "Przyjechałeś do babci na lato i miało być nudno. Wczoraj w nocy obudził Cię strzał gdzieś za lasem." },
+    { t: "Kucharz w szkolnej stołówce", d: "Gotujesz dla dzieci i nauczycieli. Ktoś regularnie zamawia u Ciebie dziesięć obiadów na wynos do starego młyna." },
+    { t: "Zegarmistrz", d: "Naprawiasz zegary od 30 lat. Każdy w mieście ma u Ciebie coś w naprawie, a Ty znasz ich rozkład dnia co do minuty." },
+    { t: "Instruktorka jazdy", d: "Uczyłaś jeździć połowę miasta. Jedna z Twoich kursantek nagle kupiła drogie auto za gotówkę." },
+    { t: "Strażak ochotnik", d: "Gasiłeś ostatni pożar stodoły. Wszyscy mówili, że to zwarcie, ale Ty czułeś zapach benzyny." },
+    { t: "Antykwariusz", d: "Handlujesz starociami. Ktoś zaoferował Ci obraz, który według katalogu wisi w muzeum w Krakowie." },
+    { t: "Pszczelarz", d: "Twoje ule stoją na skraju lasu. Pszczoły od tygodnia omijają jedną polanę i nie wiesz dlaczego." },
+    { t: "Listonoszka na zastępstwie", d: "Rozwozisz pocztę od miesiąca. Jedna koperta bez nadawcy wraca do Ciebie codziennie, choć adres jest prawidłowy." }
+  ];
+
   const STORE_KEY = "mafia-roles-v1";
   const app = document.getElementById("app");
 
@@ -278,6 +320,7 @@ button:disabled { opacity: .4; cursor: not-allowed; }
     szeryf: saved.szeryf ?? true,
     mafiaTouched: saved.mafiaTouched || false,
     powersOn: saved.powersOn ?? false,
+    storiesOn: saved.storiesOn ?? false,
     powers: (saved.powers || POWERS.map(c => c.id)).filter(id => POWER_BY_ID[id]),
     assignment: null,   // [{ name, role, power }]
     index: 0,
@@ -294,7 +337,7 @@ button:disabled { opacity: .4; cursor: not-allowed; }
       localStorage.setItem(STORE_KEY, JSON.stringify({
         players: state.players, mafia: state.mafia, medyk: state.medyk,
         szeryf: state.szeryf, mafiaTouched: state.mafiaTouched,
-        powersOn: state.powersOn, powers: state.powers
+        powersOn: state.powersOn, powers: state.powers, storiesOn: state.storiesOn
       }));
     } catch {}
   }
@@ -339,7 +382,8 @@ button:disabled { opacity: .4; cursor: not-allowed; }
     while (roles.length < state.players.length) roles.push("town");
     const shuffled = shuffle(roles);
     const powers = state.powersOn ? drawPowers(state.players.length) : [];
-    state.assignment = state.players.map((name, i) => ({ name, role: shuffled[i], power: powers[i] || null }));
+    const stories = state.storiesOn ? drawFrom(STORIES.map((_, i) => i), state.players.length) : [];
+    state.assignment = state.players.map((name, i) => ({ name, role: shuffled[i], power: powers[i] || null, story: stories[i] ?? null }));
     state.index = 0;
     state.phase = "handoff";
     state.confirm = null;
@@ -348,11 +392,12 @@ button:disabled { opacity: .4; cursor: not-allowed; }
   }
 
   // Karty nie powtarzają się, dopóki starcza talii. Potem talia jest tasowana od nowa.
-  function drawPowers(n) {
+  function drawFrom(pool, n) {
     const out = [];
-    while (out.length < n) out.push(...shuffle(state.powers));
+    while (out.length < n) out.push(...shuffle(pool));
     return out.slice(0, n);
   }
+  function drawPowers(n) { return drawFrom(state.powers, n); }
 
   let wakeLock = null;
   async function requestWakeLock() {
@@ -448,6 +493,16 @@ button:disabled { opacity: .4; cursor: not-allowed; }
           ${state.powersOn ? renderPowerList() : ""}
         </div>
 
+        <div>
+          <div class="config">
+            <label class="config-row" for="t-stories">
+              <span class="label"><span class="dot" style="background:var(--story)"></span>Backstory</span>
+              <span class="switch"><input type="checkbox" id="t-stories" data-act="toggle-stories" ${state.storiesOn ? "checked" : ""}><span></span></span>
+            </label>
+          </div>
+          ${state.storiesOn ? `<p class="summary" style="padding-top:10px">Każdy gracz losuje jedną z ${STORIES.length} historii i opowiada ją pozostałym pierwszego dnia.</p>` : ""}
+        </div>
+
         <p class="summary">Pozostali gracze (${town}) to mieszkańcy bez nocnej akcji.${state.mafiaTouched ? "" : ` Liczba mafii dobiera się sama: 1 na każde 4 osoby.`}</p>
         ${v.ok ? "" : `<p class="warn">${v.msg}</p>`}
 
@@ -532,6 +587,13 @@ button:disabled { opacity: .4; cursor: not-allowed; }
           <p>${POWER_BY_ID[p.power].desc}</p>
           <p class="note">Działa raz na grę. Gdy chcesz jej użyć, daj znać prowadzącemu.</p>
         </div>` : ""}
+        ${p.story !== null ? `
+        <div class="story-card">
+          <span class="eyebrow">Twoje backstory</span>
+          <span class="sname">${STORIES[p.story].t}</span>
+          <p>${STORIES[p.story].d}</p>
+          <p class="note">Pierwszego dnia opowiesz tę historię reszcie graczy. Możesz ją ubarwić własnymi szczegółami.</p>
+        </div>` : ""}
         <div class="spacer"></div>
         <button class="btn-primary" data-act="hide">${last ? "Zapamiętane, zakończ" : "Zapamiętane, ukryj i podaj dalej"}</button>
       </section>`;
@@ -541,7 +603,8 @@ button:disabled { opacity: .4; cursor: not-allowed; }
     const roster = state.assignment.map(a => {
       const r = ROLES[a.role];
       const pw = a.power ? `<span class="p">${POWER_BY_ID[a.power].name}</span>` : "";
-      return `<li><span>${esc(a.name)}${pw}</span><span class="r" style="color:${r.color}">${r.name}</span></li>`;
+      const st = a.story !== null ? `<span class="s">${STORIES[a.story].t}</span>` : "";
+      return `<li><span>${esc(a.name)}${pw}${st}</span><span class="r" style="color:${r.color}">${r.name}</span></li>`;
     }).join("");
     return `
       <section class="screen">
@@ -550,6 +613,7 @@ button:disabled { opacity: .4; cursor: not-allowed; }
           <h2>Miasto zasypia</h2>
         </div>
         <p class="muted">Oddajcie telefon prowadzącemu. Tylko prowadzący może zajrzeć do listy ról.</p>
+        ${state.assignment.some(x => x.story !== null) ? `<p>Pierwszego dnia każdy po kolei opowiada swoje backstory.</p>` : ""}
         ${state.showRoster
           ? `<ul class="roster">${roster}</ul>
              <button class="btn-ghost" data-act="hide-roster">Ukryj listę</button>`
@@ -594,6 +658,7 @@ button:disabled { opacity: .4; cursor: not-allowed; }
     if (act === "toggle-medyk") state.medyk = e.target.checked;
     if (act === "toggle-szeryf") state.szeryf = e.target.checked;
     if (act === "toggle-powers") state.powersOn = e.target.checked;
+    if (act === "toggle-stories") state.storiesOn = e.target.checked;
     if (act === "toggle-card") {
       const id = e.target.dataset.id;
       state.powers = e.target.checked

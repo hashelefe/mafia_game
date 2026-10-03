@@ -5,3 +5,5 @@ Otwórz `index.html` w przeglądarce telefonu. Wpisz imiona, ustaw liczbę mafii
 Role: mafia, medyk, szeryf. Pozostali gracze są mieszkańcami. Mafia widzi swoich wspólników.
 
 Karty mocy (opcjonalne): włącz przełącznik „Karty mocy” i wybierz, które karty biorą udział w losowaniu. Każdy gracz dostaje jedną kartę razem z rolą. Każda karta działa raz na grę.
+
+Backstory (opcjonalne): po włączeniu przełącznika „Backstory” każdy gracz losuje jedną z 30 historii i opowiada ją reszcie pierwszego dnia.
