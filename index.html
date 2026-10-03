@@ -20,6 +20,7 @@
   --medyk: #4fb38f;
   --szeryf: #d9ad3f;
   --town: #b9aec4;
+  --power: #a597e6;
   --font-display: "DM Serif Display", Georgia, "Times New Roman", serif;
   --font-body: "Manrope", system-ui, -apple-system, "Segoe UI", sans-serif;
   color-scheme: dark;
@@ -179,6 +180,26 @@ button:disabled { opacity: .4; cursor: not-allowed; }
 .sigil { width: 64px; height: 64px; }
 @keyframes flip { from { transform: scale(.94); } to { transform: none; } }
 
+/* Power cards */
+.power-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.power-bulk { display: flex; gap: 8px; padding-top: 12px; }
+.power-bulk button { padding: 6px 12px; font-size: .85rem; background: transparent; border: 1px solid var(--line); color: var(--muted); }
+.power-row { align-items: flex-start; }
+.power-row .label { flex-direction: column; align-items: flex-start; gap: 2px; min-width: 0; }
+.power-row .pdesc { font-weight: 400; font-size: .88rem; color: var(--muted); }
+.power-card {
+  border: 1px dashed var(--power);
+  border-radius: 14px;
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.power-card .eyebrow { color: var(--power); }
+.power-card .pname { font-family: var(--font-display); font-size: 1.8rem; line-height: 1.1; color: var(--power); }
+.power-card .note { font-size: .85rem; color: var(--muted); }
+.roster .p { display: block; font-size: .85rem; color: var(--power); }
+
 /* Narrator list */
 .roster { list-style: none; margin: 0; padding: 0; }
 .roster li { display: flex; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); }
@@ -229,6 +250,23 @@ button:disabled { opacity: .4; cursor: not-allowed; }
     town: '<svg class="sigil" viewBox="0 0 64 64" aria-hidden="true"><path fill="currentColor" d="M32 10L8 30h6v24h14V40h8v14h14V30h6z"/></svg>'
   };
 
+  // Każda karta działa raz na grę. Gracz zgłasza jej użycie prowadzącemu.
+  const POWERS = [
+    { id: "kamizelka", name: "Kamizelka kuloodporna", desc: "Przeżywasz pierwszy nocny atak mafii na Ciebie." },
+    { id: "immunitet", name: "Immunitet", desc: "Raz unikasz wyeliminowania w dziennym głosowaniu. Odpada osoba z drugim wynikiem." },
+    { id: "podwojny", name: "Podwójny głos", desc: "W jednym dziennym głosowaniu Twój głos liczy się podwójnie." },
+    { id: "weto", name: "Weto", desc: "Raz anulujesz dzienne głosowanie. Tego dnia nikt nie odpada." },
+    { id: "alibi", name: "Alibi", desc: "Gdy szeryf sprawdzi Cię pierwszy raz, prowadzący pokaże mu, że nie jesteś mafią." },
+    { id: "podsluch", name: "Podsłuch", desc: "Raz w nocy prowadzący zdradza Ci, kogo wskazała mafia. Nie dowiesz się, kto wskazywał." },
+    { id: "zemsta", name: "Zemsta", desc: "Gdy odpadniesz, wskazujesz jedną osobę, która odpada razem z Tobą." },
+    { id: "testament", name: "Testament", desc: "Gdy odpadniesz, prowadzący ujawnia wszystkim rolę jednej wybranej przez Ciebie osoby." },
+    { id: "kneblowanie", name: "Knebel", desc: "Raz w ciągu dnia wskazujesz osobę, która do końca dnia nie może mówić ani głosować." },
+    { id: "przekupstwo", name: "Przekupstwo", desc: "Raz przenosisz głos wybranej osoby na innego kandydata w dziennym głosowaniu." },
+    { id: "detektyw", name: "Detektyw", desc: "Raz w nocy pytasz prowadzącego, czy wybrana osoba ma jakąkolwiek rolę specjalną." },
+    { id: "zamiana", name: "Zamiana miejsc", desc: "Raz w nocy wskazujesz osobę. Jeśli mafia zaatakuje Ciebie, zginie ona zamiast Ciebie." }
+  ];
+  const POWER_BY_ID = Object.fromEntries(POWERS.map(c => [c.id, c]));
+
   const STORE_KEY = "mafia-roles-v1";
   const app = document.getElementById("app");
 
@@ -239,7 +277,9 @@ button:disabled { opacity: .4; cursor: not-allowed; }
     medyk: saved.medyk ?? true,
     szeryf: saved.szeryf ?? true,
     mafiaTouched: saved.mafiaTouched || false,
-    assignment: null,   // [{ name, role }]
+    powersOn: saved.powersOn ?? false,
+    powers: (saved.powers || POWERS.map(c => c.id)).filter(id => POWER_BY_ID[id]),
+    assignment: null,   // [{ name, role, power }]
     index: 0,
     phase: "setup",     // setup | handoff | reveal | done
     confirm: null,
@@ -253,7 +293,8 @@ button:disabled { opacity: .4; cursor: not-allowed; }
     try {
       localStorage.setItem(STORE_KEY, JSON.stringify({
         players: state.players, mafia: state.mafia, medyk: state.medyk,
-        szeryf: state.szeryf, mafiaTouched: state.mafiaTouched
+        szeryf: state.szeryf, mafiaTouched: state.mafiaTouched,
+        powersOn: state.powersOn, powers: state.powers
       }));
     } catch {}
   }
@@ -286,6 +327,7 @@ button:disabled { opacity: .4; cursor: not-allowed; }
     if (n < 3) return { ok: false, msg: "Dodaj co najmniej 3 graczy." };
     if (specials > n) return { ok: false, msg: `Za dużo ról specjalnych (${specials}) na ${n} graczy.` };
     if (state.mafia * 2 >= n) return { ok: false, msg: "Mafii musi być mniej niż połowa graczy, inaczej wygrywa od razu." };
+    if (state.powersOn && !state.powers.length) return { ok: false, msg: "Włącz co najmniej jedną kartę mocy albo wyłącz karty mocy." };
     return { ok: true };
   }
 
@@ -296,12 +338,20 @@ button:disabled { opacity: .4; cursor: not-allowed; }
     if (state.szeryf) roles.push("szeryf");
     while (roles.length < state.players.length) roles.push("town");
     const shuffled = shuffle(roles);
-    state.assignment = state.players.map((name, i) => ({ name, role: shuffled[i] }));
+    const powers = state.powersOn ? drawPowers(state.players.length) : [];
+    state.assignment = state.players.map((name, i) => ({ name, role: shuffled[i], power: powers[i] || null }));
     state.index = 0;
     state.phase = "handoff";
     state.confirm = null;
     state.showRoster = false;
     requestWakeLock();
+  }
+
+  // Karty nie powtarzają się, dopóki starcza talii. Potem talia jest tasowana od nowa.
+  function drawPowers(n) {
+    const out = [];
+    while (out.length < n) out.push(...shuffle(state.powers));
+    return out.slice(0, n);
   }
 
   let wakeLock = null;
@@ -330,8 +380,10 @@ button:disabled { opacity: .4; cursor: not-allowed; }
       const inp = document.getElementById("name-input");
       if (inp) inp.focus();
     }
-    window.scrollTo(0, 0);
+    if (state.phase !== lastPhase || state.phase !== "setup") window.scrollTo(0, 0);
+    lastPhase = state.phase;
   }
+  let lastPhase = null;
 
   function renderSetup() {
     const n = state.players.length;
@@ -386,6 +438,16 @@ button:disabled { opacity: .4; cursor: not-allowed; }
           </div>
         </div>
 
+        <div>
+          <div class="config">
+            <label class="config-row" for="t-powers">
+              <span class="label"><span class="dot" style="background:var(--power)"></span>Karty mocy</span>
+              <span class="switch"><input type="checkbox" id="t-powers" data-act="toggle-powers" ${state.powersOn ? "checked" : ""}><span></span></span>
+            </label>
+          </div>
+          ${state.powersOn ? renderPowerList() : ""}
+        </div>
+
         <p class="summary">Pozostali gracze (${town}) to mieszkańcy bez nocnej akcji.${state.mafiaTouched ? "" : ` Liczba mafii dobiera się sama: 1 na każde 4 osoby.`}</p>
         ${v.ok ? "" : `<p class="warn">${v.msg}</p>`}
 
@@ -396,6 +458,25 @@ button:disabled { opacity: .4; cursor: not-allowed; }
           ${state.confirm === "clear" ? confirmBox("Usunąć wszystkich graczy z listy?", "clear-yes") : ""}
         </div>
       </section>`;
+  }
+
+  function renderPowerList() {
+    const on = new Set(state.powers);
+    const rows = POWERS.map(c => `
+      <label class="config-row power-row" for="pc-${c.id}">
+        <span class="label"><span>${c.name}</span><span class="pdesc">${c.desc}</span></span>
+        <span class="switch"><input type="checkbox" id="pc-${c.id}" data-act="toggle-card" data-id="${c.id}" ${on.has(c.id) ? "checked" : ""}><span></span></span>
+      </label>`).join("");
+    const n = state.players.length;
+    const repeat = n > state.powers.length && state.powers.length
+      ? ` Graczy jest więcej niż kart, więc część kart się powtórzy.` : "";
+    return `
+      <div class="power-bulk">
+        <button data-act="cards-all">Włącz wszystkie</button>
+        <button data-act="cards-none">Wyłącz wszystkie</button>
+      </div>
+      <p class="summary" style="padding-top:10px">Każdy gracz dostaje jedną losową kartę z ${state.powers.length} włączonych.${repeat}</p>
+      <div class="config" style="border-top:none">${rows}</div>`;
   }
 
   function progress() {
@@ -444,6 +525,13 @@ button:disabled { opacity: .4; cursor: not-allowed; }
           <p class="desc">${r.desc}</p>
           ${partners}
         </div>
+        ${p.power ? `
+        <div class="power-card">
+          <span class="eyebrow">Twoja karta mocy</span>
+          <span class="pname">${POWER_BY_ID[p.power].name}</span>
+          <p>${POWER_BY_ID[p.power].desc}</p>
+          <p class="note">Działa raz na grę. Gdy chcesz jej użyć, daj znać prowadzącemu.</p>
+        </div>` : ""}
         <div class="spacer"></div>
         <button class="btn-primary" data-act="hide">${last ? "Zapamiętane, zakończ" : "Zapamiętane, ukryj i podaj dalej"}</button>
       </section>`;
@@ -452,7 +540,8 @@ button:disabled { opacity: .4; cursor: not-allowed; }
   function renderDone() {
     const roster = state.assignment.map(a => {
       const r = ROLES[a.role];
-      return `<li><span>${esc(a.name)}</span><span class="r" style="color:${r.color}">${r.name}</span></li>`;
+      const pw = a.power ? `<span class="p">${POWER_BY_ID[a.power].name}</span>` : "";
+      return `<li><span>${esc(a.name)}${pw}</span><span class="r" style="color:${r.color}">${r.name}</span></li>`;
     }).join("");
     return `
       <section class="screen">
@@ -504,6 +593,13 @@ button:disabled { opacity: .4; cursor: not-allowed; }
     if (!act) return;
     if (act === "toggle-medyk") state.medyk = e.target.checked;
     if (act === "toggle-szeryf") state.szeryf = e.target.checked;
+    if (act === "toggle-powers") state.powersOn = e.target.checked;
+    if (act === "toggle-card") {
+      const id = e.target.dataset.id;
+      state.powers = e.target.checked
+        ? POWERS.map(c => c.id).filter(x => x === id || state.powers.includes(x))
+        : state.powers.filter(x => x !== id);
+    }
     save();
     render();
   });
@@ -520,6 +616,8 @@ button:disabled { opacity: .4; cursor: not-allowed; }
       case "mafia-dec": state.mafia = Math.max(1, state.mafia - 1); state.mafiaTouched = true; break;
       case "mafia-inc": state.mafia += 1; state.mafiaTouched = true; break;
       case "clear": state.confirm = "clear"; break;
+      case "cards-all": state.powers = POWERS.map(c => c.id); break;
+      case "cards-none": state.powers = []; break;
       case "clear-yes": state.players = []; state.mafia = 1; state.mafiaTouched = false; state.confirm = null; break;
       case "deal": if (validate().ok) deal(); break;
       case "show": state.phase = "reveal"; state.confirm = null; break;
