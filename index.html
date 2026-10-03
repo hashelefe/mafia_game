@@ -1,0 +1,547 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Mafia Losowanie Ról</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Manrope:wght@400;600;800&display=swap">
+<style>
+/* Layout: one centered column, one screen at a time (setup → handoff → reveal → done). Dark by design: the phone gets passed around a dim table. */
+:root {
+  --bg: #15121a;
+  --surface: #211c27;
+  --line: #3a3242;
+  --fg: #efe6da;
+  --muted: #a99db0;
+  --accent: #c9a24a;
+  --mafia: #d1494b;
+  --medyk: #4fb38f;
+  --szeryf: #d9ad3f;
+  --town: #b9aec4;
+  --font-display: "DM Serif Display", Georgia, "Times New Roman", serif;
+  --font-body: "Manrope", system-ui, -apple-system, "Segoe UI", sans-serif;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-body);
+  font-size: 16px;
+  line-height: 1.5;
+  -webkit-tap-highlight-color: transparent;
+}
+.app {
+  max-width: 30rem;
+  margin: 0 auto;
+  min-height: 100%;
+  padding-inline: 16px;
+  padding-block: 24px 32px;
+  display: flex;
+  flex-direction: column;
+}
+.screen { display: flex; flex-direction: column; gap: 20px; flex: 1; }
+h1, h2 {
+  font-family: var(--font-display);
+  font-weight: 400;
+  margin: 0;
+  text-wrap: balance;
+  line-height: 1.1;
+}
+h1 { font-size: 2.6rem; }
+h2 { font-size: 2rem; }
+.eyebrow {
+  font-size: .75rem;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 600;
+}
+p { margin: 0; }
+.muted { color: var(--muted); }
+
+/* Players */
+.add-row { display: flex; gap: 8px; }
+.add-row input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  color: var(--fg);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+.add-row input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.players { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.players li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+.players .num { width: 1.6rem; color: var(--muted); font-variant-numeric: tabular-nums; font-size: .9rem; }
+.players .name { flex: 1; min-width: 0; overflow-wrap: anywhere; font-weight: 600; }
+.empty { color: var(--muted); padding: 12px 0; border-bottom: 1px solid var(--line); }
+
+/* Roles config */
+.config { display: flex; flex-direction: column; border-top: 1px solid var(--line); }
+.config-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+.config-row .label { display: flex; align-items: center; gap: 10px; font-weight: 600; }
+.dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+.stepper { display: flex; align-items: center; gap: 4px; }
+.stepper output { min-width: 2ch; text-align: center; font-weight: 800; font-variant-numeric: tabular-nums; font-size: 1.1rem; }
+.switch { position: relative; width: 48px; height: 28px; flex: none; }
+.switch input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
+.switch span {
+  position: absolute; inset: 0;
+  background: var(--line);
+  border-radius: 14px;
+  transition: background .15s;
+  pointer-events: none;
+}
+.switch span::after {
+  content: "";
+  position: absolute; top: 3px; left: 3px;
+  width: 22px; height: 22px; border-radius: 50%;
+  background: var(--fg);
+  transition: transform .15s;
+}
+.switch input:checked + span { background: var(--accent); }
+.switch input:checked + span::after { transform: translateX(20px); }
+.switch input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+.summary { font-size: .95rem; color: var(--muted); }
+.warn { color: var(--mafia); font-size: .95rem; font-weight: 600; }
+
+/* Buttons */
+button {
+  font: inherit;
+  cursor: pointer;
+  border: none;
+  border-radius: 12px;
+  color: var(--fg);
+  background: var(--surface);
+  padding: 12px 16px;
+  font-weight: 600;
+}
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+button:disabled { opacity: .4; cursor: not-allowed; }
+.btn-primary {
+  background: var(--accent);
+  color: var(--bg);
+  font-weight: 800;
+  font-size: 1.1rem;
+  padding: 16px;
+  width: 100%;
+}
+.btn-ghost { background: transparent; border: 1px solid var(--line); width: 100%; }
+.btn-icon { width: 40px; height: 40px; padding: 0; font-size: 1.3rem; line-height: 1; background: var(--surface); }
+.btn-remove { background: transparent; color: var(--muted); width: 36px; height: 36px; padding: 0; font-size: 1.3rem; }
+.spacer { flex: 1; }
+.actions { display: flex; flex-direction: column; gap: 10px; }
+
+/* Handoff */
+.handoff { justify-content: center; text-align: center; align-items: center; }
+.handoff .who { font-family: var(--font-display); font-size: 3.2rem; line-height: 1.05; overflow-wrap: anywhere; }
+.progress { font-variant-numeric: tabular-nums; color: var(--muted); }
+.progress-bar { width: 100%; height: 4px; background: var(--surface); border-radius: 2px; overflow: hidden; }
+.progress-bar div { height: 100%; background: var(--accent); transition: width .2s; }
+
+/* Role card */
+.card {
+  border: 2px solid var(--role);
+  border-radius: 18px;
+  padding: 28px 20px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  align-items: center;
+  animation: flip .35s ease-out;
+}
+.card .role-name { font-family: var(--font-display); font-size: 3.4rem; color: var(--role); line-height: 1; }
+.card .for { color: var(--muted); }
+.card .desc { max-width: 26rem; }
+.card .partners { border-top: 1px solid var(--line); padding-top: 14px; width: 100%; }
+.card .partners strong { color: var(--role); }
+.sigil { width: 64px; height: 64px; }
+@keyframes flip { from { transform: scale(.94); } to { transform: none; } }
+
+/* Narrator list */
+.roster { list-style: none; margin: 0; padding: 0; }
+.roster li { display: flex; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.roster .r { font-weight: 800; }
+
+.confirm-box { border: 1px solid var(--line); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.confirm-box .row { display: flex; gap: 10px; }
+.confirm-box .row button { flex: 1; }
+
+@media (prefers-reduced-motion: reduce) {
+  .card { animation: none; }
+  .switch span, .switch span::after, .progress-bar div { transition: none; }
+}
+</style>
+</head>
+<body>
+<main class="app" id="app"></main>
+
+<script>
+(() => {
+  const ROLES = {
+    mafia: {
+      name: "Mafia",
+      color: "var(--mafia)",
+      desc: "W nocy razem z resztą mafii wybierasz jedną osobę do wyeliminowania. W dzień udajesz niewinnego mieszkańca."
+    },
+    medyk: {
+      name: "Medyk",
+      color: "var(--medyk)",
+      desc: "Każdej nocy wskazujesz jedną osobę do ochrony. Jeśli mafia wybierze właśnie ją, przeżyje."
+    },
+    szeryf: {
+      name: "Szeryf",
+      color: "var(--szeryf)",
+      desc: "Każdej nocy sprawdzasz jedną osobę. Prowadzący pokaże Ci, czy należy do mafii."
+    },
+    town: {
+      name: "Mieszkaniec",
+      color: "var(--town)",
+      desc: "Nie masz nocnej akcji. W dzień szukasz mafii i głosujesz, kogo wyeliminować."
+    }
+  };
+
+  const SIGILS = {
+    mafia: '<svg class="sigil" viewBox="0 0 64 64" aria-hidden="true"><path fill="currentColor" d="M10 38h44l-4-6H14z"/><path fill="currentColor" d="M18 32l3-18c1-4 5-5 8-3l3 2 3-2c3-2 7-1 8 3l3 18z"/><rect x="10" y="38" width="44" height="4" rx="2" fill="currentColor" opacity=".55"/></svg>',
+    medyk: '<svg class="sigil" viewBox="0 0 64 64" aria-hidden="true"><path fill="currentColor" d="M26 10h12v16h16v12H38v16H26V38H10V26h16z"/></svg>',
+    szeryf: '<svg class="sigil" viewBox="0 0 64 64" aria-hidden="true"><path fill="currentColor" d="M32 6l7 13 14-2-6 13 10 10-14 2-1 15-10-9-10 9-1-15-14-2 10-10-6-13 14 2z"/><circle cx="32" cy="34" r="7" fill="var(--bg)"/></svg>',
+    town: '<svg class="sigil" viewBox="0 0 64 64" aria-hidden="true"><path fill="currentColor" d="M32 10L8 30h6v24h14V40h8v14h14V30h6z"/></svg>'
+  };
+
+  const STORE_KEY = "mafia-roles-v1";
+  const app = document.getElementById("app");
+
+  const saved = load();
+  const state = {
+    players: saved.players || [],
+    mafia: saved.mafia || 1,
+    medyk: saved.medyk ?? true,
+    szeryf: saved.szeryf ?? true,
+    mafiaTouched: saved.mafiaTouched || false,
+    assignment: null,   // [{ name, role }]
+    index: 0,
+    phase: "setup",     // setup | handoff | reveal | done
+    confirm: null,
+    showRoster: false
+  };
+
+  function load() {
+    try { return JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch { return {}; }
+  }
+  function save() {
+    try {
+      localStorage.setItem(STORE_KEY, JSON.stringify({
+        players: state.players, mafia: state.mafia, medyk: state.medyk,
+        szeryf: state.szeryf, mafiaTouched: state.mafiaTouched
+      }));
+    } catch {}
+  }
+
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  }
+
+  function suggestedMafia(n) { return Math.max(1, Math.floor(n / 4)); }
+
+  function randInt(max) {
+    const buf = new Uint32Array(1);
+    const limit = Math.floor(0x100000000 / max) * max;
+    let x;
+    do { crypto.getRandomValues(buf); x = buf[0]; } while (x >= limit);
+    return x % max;
+  }
+  function shuffle(arr) {
+    const a = arr.slice();
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = randInt(i + 1);
+      [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a;
+  }
+
+  function validate() {
+    const n = state.players.length;
+    const specials = state.mafia + (state.medyk ? 1 : 0) + (state.szeryf ? 1 : 0);
+    if (n < 3) return { ok: false, msg: "Dodaj co najmniej 3 graczy." };
+    if (specials > n) return { ok: false, msg: `Za dużo ról specjalnych (${specials}) na ${n} graczy.` };
+    if (state.mafia * 2 >= n) return { ok: false, msg: "Mafii musi być mniej niż połowa graczy, inaczej wygrywa od razu." };
+    return { ok: true };
+  }
+
+  function deal() {
+    const roles = [];
+    for (let i = 0; i < state.mafia; i++) roles.push("mafia");
+    if (state.medyk) roles.push("medyk");
+    if (state.szeryf) roles.push("szeryf");
+    while (roles.length < state.players.length) roles.push("town");
+    const shuffled = shuffle(roles);
+    state.assignment = state.players.map((name, i) => ({ name, role: shuffled[i] }));
+    state.index = 0;
+    state.phase = "handoff";
+    state.confirm = null;
+    state.showRoster = false;
+    requestWakeLock();
+  }
+
+  let wakeLock = null;
+  async function requestWakeLock() {
+    try { if ("wakeLock" in navigator && !wakeLock) wakeLock = await navigator.wakeLock.request("screen"); } catch {}
+  }
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && state.phase !== "setup") { wakeLock = null; requestWakeLock(); }
+  });
+
+  function addPlayer(raw) {
+    const name = raw.trim().replace(/\s+/g, " ");
+    if (!name) return "";
+    if (state.players.some(p => p.toLowerCase() === name.toLowerCase())) return `${name} już jest na liście.`;
+    state.players.push(name);
+    if (!state.mafiaTouched) state.mafia = suggestedMafia(state.players.length);
+    save();
+    return "";
+  }
+
+  // ---------- Render ----------
+  function render(focusInput) {
+    const fn = { setup: renderSetup, handoff: renderHandoff, reveal: renderReveal, done: renderDone }[state.phase];
+    app.innerHTML = fn();
+    if (focusInput) {
+      const inp = document.getElementById("name-input");
+      if (inp) inp.focus();
+    }
+    window.scrollTo(0, 0);
+  }
+
+  function renderSetup() {
+    const n = state.players.length;
+    const v = validate();
+    const town = Math.max(0, n - state.mafia - (state.medyk ? 1 : 0) - (state.szeryf ? 1 : 0));
+    const list = n
+      ? state.players.map((p, i) => `
+          <li>
+            <span class="num">${i + 1}.</span>
+            <span class="name">${esc(p)}</span>
+            <button class="btn-remove" data-act="remove" data-i="${i}" aria-label="Usuń ${esc(p)}">×</button>
+          </li>`).join("")
+      : `<li class="empty">Nikogo jeszcze nie ma. Wpisz imiona w kolejności, w jakiej będziecie podawać telefon.</li>`;
+
+    return `
+      <section class="screen">
+        <div>
+          <div class="eyebrow">Mafia</div>
+          <h1>Losowanie ról</h1>
+        </div>
+
+        <form class="add-row" id="add-form" autocomplete="off">
+          <input id="name-input" type="text" placeholder="Imię gracza" maxlength="24" enterkeyhint="done" aria-label="Imię gracza">
+          <button type="submit">Dodaj</button>
+        </form>
+        <p class="warn" id="add-err" hidden></p>
+
+        <div>
+          <div class="eyebrow">Gracze (${n})</div>
+          <ul class="players">${list}</ul>
+        </div>
+
+        <div>
+          <div class="eyebrow">Role</div>
+          <div class="config">
+            <div class="config-row">
+              <span class="label"><span class="dot" style="background:var(--mafia)"></span>Mafia</span>
+              <div class="stepper">
+                <button class="btn-icon" data-act="mafia-dec" aria-label="Mniej mafii" ${state.mafia <= 1 ? "disabled" : ""}>−</button>
+                <output id="mafia-count">${state.mafia}</output>
+                <button class="btn-icon" data-act="mafia-inc" aria-label="Więcej mafii">+</button>
+              </div>
+            </div>
+            <label class="config-row" for="t-medyk">
+              <span class="label"><span class="dot" style="background:var(--medyk)"></span>Medyk</span>
+              <span class="switch"><input type="checkbox" id="t-medyk" data-act="toggle-medyk" ${state.medyk ? "checked" : ""}><span></span></span>
+            </label>
+            <label class="config-row" for="t-szeryf">
+              <span class="label"><span class="dot" style="background:var(--szeryf)"></span>Szeryf</span>
+              <span class="switch"><input type="checkbox" id="t-szeryf" data-act="toggle-szeryf" ${state.szeryf ? "checked" : ""}><span></span></span>
+            </label>
+          </div>
+        </div>
+
+        <p class="summary">Pozostali gracze (${town}) to mieszkańcy bez nocnej akcji.${state.mafiaTouched ? "" : ` Liczba mafii dobiera się sama: 1 na każde 4 osoby.`}</p>
+        ${v.ok ? "" : `<p class="warn">${v.msg}</p>`}
+
+        <div class="spacer"></div>
+        <div class="actions">
+          <button class="btn-primary" data-act="deal" ${v.ok ? "" : "disabled"}>Losuj role</button>
+          ${n ? `<button class="btn-ghost" data-act="clear">Wyczyść listę</button>` : ""}
+          ${state.confirm === "clear" ? confirmBox("Usunąć wszystkich graczy z listy?", "clear-yes") : ""}
+        </div>
+      </section>`;
+  }
+
+  function progress() {
+    const total = state.assignment.length;
+    return `
+      <div style="width:100%;display:flex;flex-direction:column;gap:8px">
+        <div class="progress">Gracz ${state.index + 1} z ${total}</div>
+        <div class="progress-bar"><div style="width:${(state.index / total) * 100}%"></div></div>
+      </div>`;
+  }
+
+  function renderHandoff() {
+    const p = state.assignment[state.index];
+    return `
+      <section class="screen handoff">
+        ${progress()}
+        <div class="spacer"></div>
+        <p class="muted">Podaj telefon do</p>
+        <div class="who">${esc(p.name)}</div>
+        <p class="muted">Upewnij się, że nikt inny nie patrzy na ekran.</p>
+        <div class="spacer"></div>
+        <div class="actions" style="width:100%">
+          <button class="btn-primary" data-act="show">Jestem ${esc(p.name)}, pokaż rolę</button>
+          <button class="btn-ghost" data-act="abort">Przerwij grę</button>
+          ${state.confirm === "abort" ? confirmBox("Przerwać? Role trzeba będzie wylosować od nowa.", "abort-yes") : ""}
+        </div>
+      </section>`;
+  }
+
+  function renderReveal() {
+    const p = state.assignment[state.index];
+    const r = ROLES[p.role];
+    let partners = "";
+    if (p.role === "mafia") {
+      const others = state.assignment.filter(a => a.role === "mafia" && a.name !== p.name).map(a => `<strong>${esc(a.name)}</strong>`);
+      partners = `<div class="partners">${others.length ? `Twoja mafia: ${others.join(", ")}` : "Działasz sam."}</div>`;
+    }
+    const last = state.index === state.assignment.length - 1;
+    return `
+      <section class="screen">
+        ${progress()}
+        <div class="card" style="--role:${r.color}">
+          <span class="for">${esc(p.name)}, Twoja rola to</span>
+          <span style="color:var(--role)">${SIGILS[p.role]}</span>
+          <span class="role-name">${r.name}</span>
+          <p class="desc">${r.desc}</p>
+          ${partners}
+        </div>
+        <div class="spacer"></div>
+        <button class="btn-primary" data-act="hide">${last ? "Zapamiętane, zakończ" : "Zapamiętane, ukryj i podaj dalej"}</button>
+      </section>`;
+  }
+
+  function renderDone() {
+    const roster = state.assignment.map(a => {
+      const r = ROLES[a.role];
+      return `<li><span>${esc(a.name)}</span><span class="r" style="color:${r.color}">${r.name}</span></li>`;
+    }).join("");
+    return `
+      <section class="screen">
+        <div>
+          <div class="eyebrow">Wszyscy znają role</div>
+          <h2>Miasto zasypia</h2>
+        </div>
+        <p class="muted">Oddajcie telefon prowadzącemu. Tylko prowadzący może zajrzeć do listy ról.</p>
+        ${state.showRoster
+          ? `<ul class="roster">${roster}</ul>
+             <button class="btn-ghost" data-act="hide-roster">Ukryj listę</button>`
+          : `<button class="btn-ghost" data-act="show-roster">Pokaż role (tylko prowadzący)</button>
+             ${state.confirm === "roster" ? confirmBox("Na pewno jesteś prowadzącym? Lista pokaże role wszystkich graczy.", "roster-yes") : ""}`}
+        <div class="spacer"></div>
+        <div class="actions">
+          <button class="btn-primary" data-act="deal">Nowe losowanie, ci sami gracze</button>
+          <button class="btn-ghost" data-act="to-setup">Zmień graczy lub role</button>
+        </div>
+      </section>`;
+  }
+
+  function confirmBox(text, yesAct) {
+    return `
+      <div class="confirm-box">
+        <p>${text}</p>
+        <div class="row">
+          <button class="btn-ghost" data-act="confirm-no">Anuluj</button>
+          <button class="btn-primary" data-act="${yesAct}" style="font-size:1rem;padding:12px">Tak</button>
+        </div>
+      </div>`;
+  }
+
+  // ---------- Events ----------
+  app.addEventListener("submit", e => {
+    e.preventDefault();
+    const inp = document.getElementById("name-input");
+    const err = addPlayer(inp.value);
+    render(true);
+    if (err) {
+      const el = document.getElementById("add-err");
+      el.textContent = err;
+      el.hidden = false;
+      document.getElementById("name-input").value = inp.value;
+    }
+  });
+
+  app.addEventListener("change", e => {
+    const act = e.target.dataset.act;
+    if (!act) return;
+    if (act === "toggle-medyk") state.medyk = e.target.checked;
+    if (act === "toggle-szeryf") state.szeryf = e.target.checked;
+    save();
+    render();
+  });
+
+  app.addEventListener("click", e => {
+    const btn = e.target.closest("button[data-act]");
+    if (!btn || btn.disabled) return;
+    const act = btn.dataset.act;
+    switch (act) {
+      case "remove":
+        state.players.splice(+btn.dataset.i, 1);
+        if (!state.mafiaTouched) state.mafia = suggestedMafia(state.players.length);
+        break;
+      case "mafia-dec": state.mafia = Math.max(1, state.mafia - 1); state.mafiaTouched = true; break;
+      case "mafia-inc": state.mafia += 1; state.mafiaTouched = true; break;
+      case "clear": state.confirm = "clear"; break;
+      case "clear-yes": state.players = []; state.mafia = 1; state.mafiaTouched = false; state.confirm = null; break;
+      case "deal": if (validate().ok) deal(); break;
+      case "show": state.phase = "reveal"; state.confirm = null; break;
+      case "hide":
+        state.index += 1;
+        state.phase = state.index >= state.assignment.length ? "done" : "handoff";
+        break;
+      case "abort": state.confirm = "abort"; break;
+      case "abort-yes": state.phase = "setup"; state.assignment = null; state.confirm = null; break;
+      case "show-roster": state.confirm = "roster"; break;
+      case "roster-yes": state.showRoster = true; state.confirm = null; break;
+      case "hide-roster": state.showRoster = false; break;
+      case "to-setup": state.phase = "setup"; state.assignment = null; state.confirm = null; break;
+      case "confirm-no": state.confirm = null; break;
+      default: return;
+    }
+    save();
+    render();
+  });
+
+  render();
+})();
+</script>
+</body>
+</html>
