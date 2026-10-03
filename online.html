@@ -1,0 +1,699 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Mafia Online</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Manrope:wght@400;600;800&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main class="app" id="app"></main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.5/peerjs.min.js"></script>
+<script src="shared.js"></script>
+<script>
+/*
+ * Tryb online. Telefon mistrza gry jest serwerem: trzyma stan lobby, losuje role
+ * i każdemu graczowi wysyła wyłącznie jego własną rolę, kartę i historię.
+ * Telefony łączą się bezpośrednio (WebRTC) przez publiczny broker PeerJS.
+ * Gracze nie widzą cudzych ról, bo te nigdy nie trafiają na ich telefony.
+ */
+(() => {
+  const { ROLES, POWER_BY_ID, STORIES, esc, defaultConfig, validate, deal, renderConfig,
+          applyConfigAction, autoMafia, renderIdentity, confirmBox, keepAwake } = window.Mafia;
+
+  const PEER_PREFIX = "mafia-pl-lobby-";
+  const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ";
+  const HOST_KEY = "mafia-online-host-v1";
+  const PLAYER_KEY = "mafia-online-player-v1";
+  const CONFIG_KEY = "mafia-roles-v1";   // te same ustawienia ról co w trybie jednego telefonu
+  const PING_MS = 4000;
+  // Domyślnie publiczny broker PeerJS. Parametr ?peerserver=host:port pozwala użyć własnego (np. do testów).
+  const PEER_OPTS = (() => {
+    const v = new URLSearchParams(location.search).get("peerserver");
+    if (!v) return {};
+    const [h, port] = v.split(":");
+    return { host: h, port: Number(port) || 9000, path: "/", secure: false };
+  })();
+  const TIMEOUT_MS = 12000;
+
+  const app = document.getElementById("app");
+  const ui = { screen: "home", confirm: null, error: "", reveal: false };
+
+  function readJSON(key) { try { return JSON.parse(localStorage.getItem(key)) || null; } catch { return null; } }
+  function writeJSON(key, v) { try { v === null ? localStorage.removeItem(key) : localStorage.setItem(key, JSON.stringify(v)); } catch {} }
+  function randomCode() { let s = ""; for (let i = 0; i < 4; i++) s += CODE_CHARS[Math.floor(Math.random() * CODE_CHARS.length)]; return s; }
+  function randomToken() { return Array.from(crypto.getRandomValues(new Uint8Array(12)), b => b.toString(16).padStart(2, "0")).join(""); }
+  function cleanName(raw) { return String(raw || "").trim().replace(/\s+/g, " ").slice(0, 24); }
+  function cleanCode(raw) { return String(raw || "").toUpperCase().replace(/[^A-Z]/g, "").slice(0, 4); }
+  function clock(ts) { return new Date(ts).toLocaleTimeString("pl-PL", { hour: "2-digit", minute: "2-digit" }); }
+  function lobbyUrl(code) { return location.href.split("#")[0] + "#" + code; }
+  function vibrate(p) { try { navigator.vibrate && navigator.vibrate(p); } catch {} }
+
+  // =====================================================================
+  // MISTRZ GRY
+  // =====================================================================
+  let host = null;   // { code, cfg, players: [{token, name}], phase, assignment: {token: {...}}, log: [], alerts: [] }
+  let hostPeer = null;
+  const conns = new Map();      // token -> DataConnection
+  const lastSeen = new Map();   // token -> ms
+
+  function saveHost() {
+    if (!host) return writeJSON(HOST_KEY, null);
+    writeJSON(HOST_KEY, host);
+    const prev = readJSON(CONFIG_KEY) || {};
+    writeJSON(CONFIG_KEY, { ...prev, ...host.cfg });
+  }
+
+  function startHost(existing) {
+    host = existing || {
+      code: randomCode(),
+      cfg: defaultConfig(readJSON(CONFIG_KEY) || {}),
+      players: [],
+      phase: "lobby",
+      assignment: {},
+      log: [],
+      alerts: []
+    };
+    ui.screen = "host";
+    ui.status = "connecting";
+    saveHost();
+    openHostPeer(!!existing);
+    keepAwake();
+    render();
+  }
+
+  function openHostPeer(restoring) {
+    if (hostPeer) { try { hostPeer.destroy(); } catch {} }
+    const peer = new Peer(PEER_PREFIX + host.code, PEER_OPTS);
+    hostPeer = peer;
+    peer.on("open", () => { ui.status = "online"; render(); });
+    peer.on("connection", conn => attachConn(conn));
+    peer.on("disconnected", () => {
+      ui.status = "reconnecting"; render();
+      setTimeout(() => { if (hostPeer === peer && !peer.destroyed) peer.reconnect(); }, 1500);
+    });
+    peer.on("error", err => {
+      if (hostPeer !== peer) return;
+      if (err.type === "unavailable-id") {
+        if (restoring) {
+          // Broker jeszcze pamięta poprzednie połączenie tego lobby. Ponawiamy, aż je zwolni.
+          ui.status = "reconnecting"; render();
+          setTimeout(() => { if (hostPeer === peer) openHostPeer(true); }, 3000);
+        } else {
+          host.code = randomCode(); saveHost(); openHostPeer(false);
+        }
+        return;
+      }
+      if (["network", "server-error", "socket-error", "socket-closed", "disconnected"].includes(err.type)) {
+        ui.status = "reconnecting"; render();
+        setTimeout(() => { if (hostPeer === peer) openHostPeer(true); }, 3000);
+      }
+    });
+  }
+
+  function attachConn(conn) {
+    let token = null;
+    conn.on("data", msg => {
+      if (!msg || typeof msg !== "object") return;
+      if (msg.t === "join") {
+        token = String(msg.token || "").slice(0, 64);
+        handleJoin(conn, token, cleanName(msg.name));
+      } else if (!token || conns.get(token) !== conn) {
+        return;
+      } else if (msg.t === "ping") {
+        lastSeen.set(token, Date.now());
+        conn.send({ t: "pong" });
+      } else if (msg.t === "use") {
+        handleUse(token);
+      } else if (msg.t === "leave") {
+        if (host.phase === "lobby") removePlayer(token);
+        conn.close();
+      }
+    });
+    conn.on("close", () => {
+      if (token && conns.get(token) === conn) { conns.delete(token); render(); }
+    });
+    conn.on("error", () => {});
+  }
+
+  function handleJoin(conn, token, name) {
+    if (!token || !name) { conn.send({ t: "error", msg: "Podaj imię." }); return; }
+    const known = host.players.find(p => p.token === token);
+    if (!known) {
+      if (host.phase !== "lobby") { conn.send({ t: "error", msg: "Gra już trwa. Poproś mistrza gry, żeby wrócił do lobby, wtedy dołączysz." }); return; }
+      if (host.players.some(p => p.name.toLowerCase() === name.toLowerCase())) {
+        conn.send({ t: "error", msg: `Imię ${name} jest już zajęte w tym lobby. Wybierz inne.` }); return;
+      }
+      host.players.push({ token, name });
+      autoMafia(host.cfg, host.players.length);
+    } else if (host.phase === "lobby" && known.name !== name &&
+               !host.players.some(p => p.token !== token && p.name.toLowerCase() === name.toLowerCase())) {
+      known.name = name;
+    }
+    const old = conns.get(token);
+    if (old && old !== conn) { try { old.close(); } catch {} }
+    conns.set(token, conn);
+    lastSeen.set(token, Date.now());
+    saveHost();
+    broadcast();
+    render();
+  }
+
+  function removePlayer(token) {
+    host.players = host.players.filter(p => p.token !== token);
+    autoMafia(host.cfg, host.players.length);
+    const c = conns.get(token);
+    if (c) { try { c.send({ t: "kicked" }); } catch {} setTimeout(() => { try { c.close(); } catch {} }, 300); conns.delete(token); }
+    saveHost();
+    broadcast();
+    render();
+  }
+
+  function handleUse(token) {
+    const a = host.assignment[token];
+    const p = host.players.find(x => x.token === token);
+    if (host.phase !== "game" || !a || !a.power || a.used || !p) { sendState(token); return; }
+    a.used = Date.now();
+    const entry = { id: randomToken(), name: p.name, power: a.power, role: a.role, at: a.used };
+    host.log.unshift(entry);
+    host.alerts.push(entry.id);
+    vibrate([200, 100, 200]);
+    saveHost();
+    sendState(token);
+    render();
+  }
+
+  function hostDeal() {
+    const n = host.players.length;
+    if (!validate(host.cfg, n).ok) return;
+    const dealt = deal(host.cfg, n);
+    host.assignment = {};
+    host.players.forEach((p, i) => { host.assignment[p.token] = { ...dealt[i], used: null }; });
+    host.phase = "game";
+    host.log = [];
+    host.alerts = [];
+    saveHost();
+    broadcast();
+  }
+
+  function lobbyInfo() {
+    return {
+      code: host.code,
+      phase: host.phase,
+      players: host.players.map(p => p.name),
+      stories: host.cfg.storiesOn
+    };
+  }
+
+  function stateFor(token) {
+    const p = host.players.find(x => x.token === token);
+    if (!p) return { t: "kicked" };
+    let me = null;
+    if (host.phase === "game" && host.assignment[token]) {
+      const a = host.assignment[token];
+      const partners = a.role === "mafia"
+        ? host.players.filter(x => x.token !== token && host.assignment[x.token]?.role === "mafia").map(x => x.name)
+        : null;
+      me = { name: p.name, role: a.role, power: a.power, story: a.story, used: a.used, partners };
+    }
+    return { t: "state", lobby: lobbyInfo(), name: p.name, me };
+  }
+
+  function sendState(token) {
+    const c = conns.get(token);
+    if (c && c.open) { try { c.send(stateFor(token)); } catch {} }
+  }
+  function broadcast() { for (const token of conns.keys()) sendState(token); }
+
+  function isOnline(token) {
+    const c = conns.get(token);
+    return !!(c && c.open && Date.now() - (lastSeen.get(token) || 0) < TIMEOUT_MS);
+  }
+
+  function endHost() {
+    for (const c of conns.values()) { try { c.send({ t: "closed" }); } catch {} }
+    setTimeout(() => {
+      for (const c of conns.values()) { try { c.close(); } catch {} }
+      conns.clear();
+      if (hostPeer) { try { hostPeer.destroy(); } catch {} hostPeer = null; }
+    }, 300);
+    host = null;
+    saveHost();
+    ui.screen = "home";
+    ui.confirm = null;
+    render();
+  }
+
+  // Odśwież statusy online co kilka sekund.
+  setInterval(() => { if (ui.screen === "host" && !ui.confirm) render(true); }, PING_MS);
+
+  function statusBadge(s) {
+    const map = {
+      online: ["on", "Lobby otwarte"],
+      connecting: ["wait", "Otwieram lobby…"],
+      reconnecting: ["wait", "Łączę ponownie…"]
+    };
+    const [cls, label] = map[s] || map.connecting;
+    return `<span class="status"><span class="dot ${cls}"></span>${label}</span>`;
+  }
+
+  function renderHost() {
+    return host.phase === "lobby" ? renderHostLobby() : renderHostGame();
+  }
+
+  function renderHostLobby() {
+    const n = host.players.length;
+    const v = validate(host.cfg, n);
+    const list = n
+      ? host.players.map((p, i) => `
+          <li>
+            <span class="num">${i + 1}.</span>
+            <span class="name">${esc(p.name)}</span>
+            <span class="status"><span class="dot ${isOnline(p.token) ? "on" : "off"}"></span></span>
+            <button class="btn-remove" data-act="kick" data-token="${p.token}" aria-label="Usuń ${esc(p.name)}">×</button>
+          </li>`).join("")
+      : `<li class="empty">Nikt jeszcze nie dołączył. Gracze otwierają tę stronę na swoich telefonach i wpisują kod.</li>`;
+    return `
+      <section class="screen">
+        <div>
+          <div class="eyebrow">Mafia online · mistrz gry</div>
+          <h1>Lobby</h1>
+        </div>
+        ${statusBadge(ui.status)}
+        <div class="code-box">
+          <span class="eyebrow">Kod lobby</span>
+          <span class="code">${host.code}</span>
+          <span class="link">${esc(lobbyUrl(host.code))}</span>
+          <button data-act="copy-link">Kopiuj link dla graczy</button>
+        </div>
+
+        <div>
+          <div class="eyebrow">Gracze (${n})</div>
+          <ul class="players">${list}</ul>
+        </div>
+
+        ${renderConfig(host.cfg, n)}
+        ${v.ok ? "" : `<p class="warn">${v.msg}</p>`}
+
+        <div class="spacer"></div>
+        <div class="actions">
+          <button class="btn-primary" data-act="host-deal" ${v.ok ? "" : "disabled"}>Rozdaj role</button>
+          <button class="btn-ghost" data-act="host-close">Zamknij lobby</button>
+          ${ui.confirm === "close" ? confirmBox("Zamknąć lobby? Wszyscy gracze zostaną rozłączeni.", "host-close-yes") : ""}
+        </div>
+      </section>`;
+  }
+
+  function renderHostGame() {
+    const alerts = host.alerts.map(id => host.log.find(e => e.id === id)).filter(Boolean);
+    const alertHtml = alerts.map(e => `
+      <div class="alert" role="alert">
+        <span class="eyebrow" style="color:var(--power)">Użycie karty · ${clock(e.at)}</span>
+        <span class="who-uses">${esc(e.name)} używa karty <em>${POWER_BY_ID[e.power].name}</em></span>
+        <p>${POWER_BY_ID[e.power].desc}</p>
+        <p class="muted">Rola: <strong style="color:${ROLES[e.role].color}">${ROLES[e.role].name}</strong></p>
+        <button class="btn-ghost" data-act="ack" data-id="${e.id}">Przyjąłem</button>
+      </div>`).join("");
+
+    const roster = host.players.map(p => {
+      const a = host.assignment[p.token];
+      if (!a) return "";
+      const r = ROLES[a.role];
+      const pw = a.power ? `<span class="p ${a.used ? "used" : ""}">${POWER_BY_ID[a.power].name}${a.used ? ` · użyta ${clock(a.used)}` : ""}</span>` : "";
+      const st = a.story !== null ? `<span class="s">${STORIES[a.story].t}</span>` : "";
+      return `<li>
+        <span><span class="status"><span class="dot ${isOnline(p.token) ? "on" : "off"}"></span></span> ${esc(p.name)}${pw}${st}</span>
+        <span class="r" style="color:${r.color}">${r.name}</span>
+      </li>`;
+    }).join("");
+
+    const log = host.log.length
+      ? `<ul class="log">${host.log.map(e => `<li><span>${esc(e.name)}: ${POWER_BY_ID[e.power].name}</span><time>${clock(e.at)}</time></li>`).join("")}</ul>`
+      : `<p class="muted">Nikt jeszcze nie użył karty.</p>`;
+
+    return `
+      <section class="screen">
+        <div>
+          <div class="eyebrow">Mafia online · mistrz gry · ${host.code}</div>
+          <h2>Gra trwa</h2>
+        </div>
+        ${statusBadge(ui.status)}
+        ${alertHtml}
+        ${host.cfg.storiesOn ? `<p>Pierwszego dnia każdy po kolei opowiada swoje backstory.</p>` : ""}
+        <div>
+          <div class="eyebrow">Role graczy</div>
+          <ul class="roster">${roster}</ul>
+        </div>
+        ${host.cfg.powersOn ? `<div><div class="eyebrow">Użyte karty</div>${log}</div>` : ""}
+        <div class="spacer"></div>
+        <div class="actions">
+          <button class="btn-primary" data-act="host-redeal">Nowe losowanie, ci sami gracze</button>
+          <button class="btn-ghost" data-act="host-lobby">Wróć do lobby</button>
+          ${ui.confirm === "redeal" ? confirmBox("Wylosować role od nowa? Wszyscy dostaną nowe role i karty.", "host-redeal-yes") : ""}
+          ${ui.confirm === "lobby" ? confirmBox("Zakończyć grę i wrócić do lobby? Gracze stracą obecne role.", "host-lobby-yes") : ""}
+        </div>
+      </section>`;
+  }
+
+  // =====================================================================
+  // GRACZ
+  // =====================================================================
+  let player = null;       // { token, name, code }
+  let peer = null;
+  let conn = null;
+  let lobby = null;        // ostatni stan od mistrza gry
+  let me = null;
+  let lastMsg = 0;
+  let retryTimer = null;
+  let pendingUse = false;
+
+  function startPlayer(code, name) {
+    const prev = readJSON(PLAYER_KEY);
+    player = { token: prev && prev.code === code && prev.token ? prev.token : randomToken(), name, code };
+    writeJSON(PLAYER_KEY, player);
+    lobby = null; me = null;
+    ui.screen = "player";
+    ui.status = "connecting";
+    ui.error = "";
+    ui.reveal = false;
+    if (location.hash !== "#" + code) history.replaceState(null, "", "#" + code);
+    keepAwake();
+    render();
+    openPlayerPeer();
+  }
+
+  function openPlayerPeer() {
+    if (peer && !peer.destroyed) { connectToHost(); return; }
+    peer = new Peer(PEER_OPTS);
+    const p = peer;
+    p.on("open", () => connectToHost());
+    p.on("disconnected", () => { setTimeout(() => { if (peer === p && !p.destroyed) p.reconnect(); }, 1500); });
+    p.on("error", err => {
+      if (peer !== p) return;
+      if (err.type === "peer-unavailable") {
+        ui.status = lobby ? "reconnecting" : "notfound";
+        render();
+        scheduleRetry(3000);
+      } else if (["network", "server-error", "socket-error", "socket-closed"].includes(err.type)) {
+        ui.status = "reconnecting"; render();
+        try { p.destroy(); } catch {}
+        peer = null;
+        scheduleRetry(3000);
+      }
+    });
+  }
+
+  function scheduleRetry(ms) {
+    clearTimeout(retryTimer);
+    retryTimer = setTimeout(() => { if (player) openPlayerPeer(); }, ms);
+  }
+
+  function connectToHost() {
+    if (!player || !peer || peer.destroyed || peer.disconnected) return;
+    if (conn) { try { conn.close(); } catch {} }
+    const c = peer.connect(PEER_PREFIX + player.code, { reliable: true });
+    conn = c;
+    lastMsg = Date.now();
+    c.on("open", () => {
+      lastMsg = Date.now();
+      c.send({ t: "join", token: player.token, name: player.name });
+    });
+    c.on("data", msg => {
+      if (conn !== c || !msg) return;
+      lastMsg = Date.now();
+      if (msg.t === "state") {
+        const wasGame = !!me;
+        lobby = msg.lobby; me = msg.me;
+        if (msg.name && msg.name !== player.name) { player.name = msg.name; writeJSON(PLAYER_KEY, player); }
+        if (!wasGame && me) { ui.reveal = false; vibrate(150); }
+        if (me && me.used) pendingUse = false;
+        ui.status = "online"; ui.error = "";
+        render();
+      } else if (msg.t === "error") {
+        ui.status = "refused"; ui.error = msg.msg; render();
+        leavePlayer(false);
+      } else if (msg.t === "kicked") {
+        ui.status = "refused"; ui.error = "Mistrz gry usunął Cię z lobby."; render();
+        leavePlayer(false);
+      } else if (msg.t === "closed") {
+        ui.status = "refused"; ui.error = "Mistrz gry zamknął lobby."; render();
+        leavePlayer(false);
+      }
+    });
+    c.on("close", () => {
+      if (conn !== c || !player) return;
+      conn = null;
+      ui.status = "reconnecting"; render();
+      scheduleRetry(2000);
+    });
+    c.on("error", () => {});
+  }
+
+  // Ping do mistrza gry. Brak odpowiedzi przez dłuższy czas oznacza zerwane połączenie.
+  setInterval(() => {
+    if (!player || !conn) return;
+    if (conn.open) { try { conn.send({ t: "ping" }); } catch {} }
+    if (Date.now() - lastMsg > TIMEOUT_MS && ui.status !== "notfound") {
+      try { conn.close(); } catch {}
+      conn = null;
+      ui.status = "reconnecting"; render();
+      scheduleRetry(500);
+    }
+  }, PING_MS);
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState !== "visible") return;
+    if (player && (!conn || !conn.open)) scheduleRetry(100);
+    if (hostPeer && hostPeer.disconnected && !hostPeer.destroyed) hostPeer.reconnect();
+  });
+
+  function leavePlayer(forget) {
+    clearTimeout(retryTimer);
+    const c = conn; conn = null;
+    if (c) { setTimeout(() => { try { c.close(); } catch {} }, 200); }
+    if (peer) { const p = peer; peer = null; setTimeout(() => { try { p.destroy(); } catch {} }, 300); }
+    if (forget) { writeJSON(PLAYER_KEY, null); }
+    player = forget ? null : player && { ...player, stale: true };
+    if (forget) { ui.screen = "home"; history.replaceState(null, "", location.pathname + location.search); }
+  }
+
+  function renderPlayer() {
+    if (ui.status === "refused") {
+      return `
+        <section class="screen">
+          <div><div class="eyebrow">Mafia online · ${esc(player ? player.code : "")}</div><h2>Nie udało się dołączyć</h2></div>
+          <p class="warn">${esc(ui.error)}</p>
+          <div class="spacer"></div>
+          <div class="actions">
+            <button class="btn-primary" data-act="retry-join">Spróbuj ponownie</button>
+            <button class="btn-ghost" data-act="player-home">Wróć na start</button>
+          </div>
+        </section>`;
+    }
+
+    const badge = {
+      online: ["on", "Połączono z mistrzem gry"],
+      connecting: ["wait", "Łączę z lobby…"],
+      reconnecting: ["wait", "Połączenie zerwane, łączę ponownie…"],
+      notfound: ["off", `Nie widzę lobby ${player.code}. Sprawdź kod albo poczekaj, aż mistrz gry otworzy stronę.`]
+    }[ui.status] || ["wait", "Łączę…"];
+    const statusHtml = `<span class="status"><span class="dot ${badge[0]}"></span>${badge[1]}</span>`;
+
+    if (!me) {
+      const names = lobby ? lobby.players : [];
+      return `
+        <section class="screen">
+          <div>
+            <div class="eyebrow">Mafia online · ${player.code}</div>
+            <h2>Cześć, ${esc(player.name)}</h2>
+          </div>
+          ${statusHtml}
+          <p class="muted">${lobby ? "Czekaj, aż mistrz gry rozda role. Twoja rola pojawi się tutaj." : "Za chwilę zobaczysz listę graczy."}</p>
+          ${lobby ? `
+          <div>
+            <div class="eyebrow">W lobby (${names.length})</div>
+            <ul class="players">${names.map((n, i) => `<li><span class="num">${i + 1}.</span><span class="name">${esc(n)}</span>${n === player.name ? `<span class="tag">to Ty</span>` : ""}</li>`).join("")}</ul>
+          </div>` : ""}
+          <div class="spacer"></div>
+          <div class="actions">
+            <button class="btn-ghost" data-act="player-leave">Opuść lobby</button>
+            ${ui.confirm === "leave" ? confirmBox("Opuścić lobby?", "player-leave-yes") : ""}
+          </div>
+        </section>`;
+    }
+
+    let footer = "";
+    if (me.power) {
+      if (me.used) {
+        footer = `<p class="note">Karta użyta o ${clock(me.used)}. Mistrz gry dostał powiadomienie.</p>`;
+      } else if (pendingUse) {
+        footer = `<p class="note">Wysyłam do mistrza gry…</p>`;
+      } else if (ui.confirm === "use") {
+        footer = confirmBox(`Użyć karty ${POWER_BY_ID[me.power].name}? Mistrz gry dostanie powiadomienie, a karty nie da się użyć drugi raz.`, "use-yes");
+      } else {
+        footer = `<p class="note">Działa raz na grę.</p>
+          <button class="btn-power" data-act="use" ${ui.status === "online" ? "" : "disabled"}>Użyj karty</button>`;
+      }
+    }
+
+    return `
+      <section class="screen">
+        <div class="eyebrow">Mafia online · ${player.code}</div>
+        ${statusHtml}
+        ${ui.reveal
+          ? `${renderIdentity(me, me.partners, footer)}
+             <button class="btn-ghost" data-act="hide-role">Ukryj</button>`
+          : `<div class="veil">
+               <span class="who" style="font-family:var(--font-display);font-size:2.2rem">${esc(me.name)}</span>
+               <p class="muted">Role są rozdane. Zasłoń ekran przed innymi i odkryj swoją rolę.</p>
+               <button class="btn-primary" data-act="show-role">Pokaż moją rolę</button>
+             </div>
+             ${me.power && !me.used ? `<p class="muted">Masz kartę mocy. Przycisk do jej użycia jest pod rolą.</p>` : ""}`}
+        <div class="spacer"></div>
+      </section>`;
+  }
+
+  // =====================================================================
+  // START
+  // =====================================================================
+  function renderHome() {
+    const prev = readJSON(PLAYER_KEY);
+    const hashCode = cleanCode(location.hash.slice(1));
+    const savedHost = readJSON(HOST_KEY);
+    return `
+      <section class="screen">
+        <div>
+          <div class="eyebrow">Mafia · każdy na swoim telefonie</div>
+          <h1>Mafia online</h1>
+        </div>
+        <a class="mode-link" href="index.html">← Gra na jednym telefonie</a>
+
+        <form class="actions" id="join-form" autocomplete="off">
+          <div class="eyebrow">Dołącz jako gracz</div>
+          <div class="field">
+            <label class="muted" for="join-code">Kod lobby</label>
+            <input class="code-input" id="join-code" type="text" inputmode="text" maxlength="4" placeholder="ABCD" value="${esc(hashCode || (prev && prev.code) || "")}" autocapitalize="characters">
+          </div>
+          <div class="field">
+            <label class="muted" for="join-name">Twoje imię</label>
+            <input id="join-name" type="text" maxlength="24" placeholder="Imię" value="${esc((prev && prev.name) || "")}" enterkeyhint="go">
+          </div>
+          ${ui.error ? `<p class="warn">${esc(ui.error)}</p>` : ""}
+          <button class="btn-primary" type="submit">Dołącz</button>
+        </form>
+
+        <div class="or">albo</div>
+
+        <div class="actions">
+          <div class="eyebrow">Prowadzisz grę?</div>
+          ${savedHost ? `<button class="btn-primary" data-act="host-resume">Wróć do lobby ${esc(savedHost.code)}</button>` : ""}
+          <button class="${savedHost ? "btn-ghost" : "btn-primary"}" data-act="host-new">Załóż nowe lobby</button>
+          <p class="summary">Mistrz gry nie dostaje roli. Ustawia grę, widzi role wszystkich i dostaje powiadomienia o użytych kartach. Jego telefon musi mieć tę stronę otwartą przez całą grę.</p>
+        </div>
+      </section>`;
+  }
+
+  let lastScreen = null;
+  function render(quiet) {
+    // Nie przerysowuj, gdy ktoś pisze w polu na ekranie startowym.
+    if (quiet && ui.screen !== "host") return;
+    const active = document.activeElement;
+    if (quiet && active && active.tagName === "INPUT" && app.contains(active)) return;
+    const html = ui.screen === "host" ? renderHost() : ui.screen === "player" ? renderPlayer() : renderHome();
+    app.innerHTML = html;
+    if (ui.screen !== lastScreen) window.scrollTo(0, 0);
+    lastScreen = ui.screen;
+  }
+
+  // ---------- Events ----------
+  app.addEventListener("submit", e => {
+    e.preventDefault();
+    if (e.target.id !== "join-form") return;
+    const code = cleanCode(document.getElementById("join-code").value);
+    const name = cleanName(document.getElementById("join-name").value);
+    if (code.length !== 4) { ui.error = "Kod lobby ma 4 litery."; render(); return; }
+    if (!name) { ui.error = "Wpisz swoje imię."; render(); return; }
+    ui.error = "";
+    startPlayer(code, name);
+  });
+
+  app.addEventListener("change", e => {
+    const act = e.target.dataset.act;
+    if (!act || !host) return;
+    if (applyConfigAction(host.cfg, act, e.target, host.players.length)) { saveHost(); render(); }
+  });
+
+  app.addEventListener("click", e => {
+    const btn = e.target.closest("button[data-act]");
+    if (!btn || btn.disabled) return;
+    const act = btn.dataset.act;
+    if (host && ui.screen === "host" && applyConfigAction(host.cfg, act, btn, host.players.length)) { saveHost(); render(); return; }
+    switch (act) {
+      // start
+      case "host-new": writeJSON(HOST_KEY, null); startHost(null); return;
+      case "host-resume": startHost(readJSON(HOST_KEY)); return;
+      // mistrz gry
+      case "copy-link": {
+        const url = lobbyUrl(host.code);
+        const done = () => { btn.textContent = "Skopiowano"; };
+        if (navigator.clipboard) navigator.clipboard.writeText(url).then(done, () => {});
+        return;
+      }
+      case "kick": removePlayer(btn.dataset.token); return;
+      case "host-deal": hostDeal(); break;
+      case "host-redeal": ui.confirm = "redeal"; break;
+      case "host-redeal-yes": ui.confirm = null; hostDeal(); break;
+      case "host-lobby": ui.confirm = "lobby"; break;
+      case "host-lobby-yes":
+        ui.confirm = null; host.phase = "lobby"; host.assignment = {}; host.alerts = [];
+        saveHost(); broadcast(); break;
+      case "host-close": ui.confirm = "close"; break;
+      case "host-close-yes": endHost(); return;
+      case "ack": host.alerts = host.alerts.filter(id => id !== btn.dataset.id); saveHost(); break;
+      // gracz
+      case "show-role": ui.reveal = true; break;
+      case "hide-role": ui.reveal = false; ui.confirm = null; break;
+      case "use": ui.confirm = "use"; break;
+      case "use-yes":
+        ui.confirm = null;
+        if (conn && conn.open) { pendingUse = true; conn.send({ t: "use" }); }
+        break;
+      case "player-leave": ui.confirm = "leave"; break;
+      case "player-leave-yes":
+        ui.confirm = null;
+        if (conn && conn.open) { try { conn.send({ t: "leave" }); } catch {} }
+        leavePlayer(true); break;
+      case "retry-join": {
+        const p = player;
+        ui.error = "";
+        if (p) startPlayer(p.code, p.name);
+        return;
+      }
+      case "player-home": leavePlayer(true); ui.error = ""; break;
+      case "confirm-no": ui.confirm = null; break;
+      default: return;
+    }
+    render();
+  });
+
+  // Po odświeżeniu strony wróć tam, gdzie się było.
+  const resumeHost = readJSON(HOST_KEY);
+  const resumePlayer = readJSON(PLAYER_KEY);
+  const hashCode = cleanCode(location.hash.slice(1));
+  if (!window.Peer) {
+    app.innerHTML = `<section class="screen"><h2>Brak połączenia</h2><p class="warn">Nie udało się wczytać biblioteki do łączenia telefonów. Sprawdź internet i odśwież stronę.</p></section>`;
+  } else if (resumeHost && !hashCode) {
+    startHost(resumeHost);
+  } else if (resumePlayer && resumePlayer.code && resumePlayer.name && (!hashCode || hashCode === resumePlayer.code)) {
+    startPlayer(resumePlayer.code, resumePlayer.name);
+  } else {
+    render();
+  }
+})();
+</script>
+</body>
+</html>

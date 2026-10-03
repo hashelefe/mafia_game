@@ -1,0 +1,391 @@
+// Wspólne dane i logika obu trybów: role, karty mocy, backstory, losowanie i widoki ustawień.
+(() => {
+  const ROLES = {
+    mafia: {
+      name: "Mafia",
+      color: "var(--mafia)",
+      desc: "W nocy razem z resztą mafii wybierasz jedną osobę do wyeliminowania. W dzień udajesz niewinnego mieszkańca."
+    },
+    medyk: {
+      name: "Medyk",
+      color: "var(--medyk)",
+      desc: "Każdej nocy wskazujesz jedną osobę do ochrony. Jeśli mafia wybierze właśnie ją, przeżyje."
+    },
+    szeryf: {
+      name: "Szeryf",
+      color: "var(--szeryf)",
+      desc: "Każdej nocy sprawdzasz jedną osobę. Prowadzący pokaże Ci, czy należy do mafii."
+    },
+    town: {
+      name: "Mieszkaniec",
+      color: "var(--town)",
+      desc: "Nie masz nocnej akcji. W dzień szukasz mafii i głosujesz, kogo wyeliminować."
+    }
+  };
+
+  const SIGILS = {
+    mafia: '<svg class="sigil" viewBox="0 0 64 64" aria-hidden="true"><path fill="currentColor" d="M10 38h44l-4-6H14z"/><path fill="currentColor" d="M18 32l3-18c1-4 5-5 8-3l3 2 3-2c3-2 7-1 8 3l3 18z"/><rect x="10" y="38" width="44" height="4" rx="2" fill="currentColor" opacity=".55"/></svg>',
+    medyk: '<svg class="sigil" viewBox="0 0 64 64" aria-hidden="true"><path fill="currentColor" d="M26 10h12v16h16v12H38v16H26V38H10V26h16z"/></svg>',
+    szeryf: '<svg class="sigil" viewBox="0 0 64 64" aria-hidden="true"><path fill="currentColor" d="M32 6l7 13 14-2-6 13 10 10-14 2-1 15-10-9-10 9-1-15-14-2 10-10-6-13 14 2z"/><circle cx="32" cy="34" r="7" fill="var(--bg)"/></svg>',
+    town: '<svg class="sigil" viewBox="0 0 64 64" aria-hidden="true"><path fill="currentColor" d="M32 10L8 30h6v24h14V40h8v14h14V30h6z"/></svg>'
+  };
+
+  // Każda karta działa raz na grę. Gracz zgłasza jej użycie prowadzącemu.
+  const POWERS = [
+    { id: "kamizelka", name: "Kamizelka kuloodporna", desc: "Przeżywasz pierwszy nocny atak mafii na Ciebie." },
+    { id: "immunitet", name: "Immunitet", desc: "Raz unikasz wyeliminowania w dziennym głosowaniu. Odpada osoba z drugim wynikiem." },
+    { id: "podwojny", name: "Podwójny głos", desc: "W jednym dziennym głosowaniu Twój głos liczy się podwójnie." },
+    { id: "weto", name: "Weto", desc: "Raz anulujesz dzienne głosowanie. Tego dnia nikt nie odpada." },
+    { id: "alibi", name: "Alibi", desc: "Gdy szeryf sprawdzi Cię pierwszy raz, prowadzący pokaże mu, że nie jesteś mafią." },
+    { id: "podsluch", name: "Podsłuch", desc: "Raz w nocy prowadzący zdradza Ci, kogo wskazała mafia. Nie dowiesz się, kto wskazywał." },
+    { id: "zemsta", name: "Zemsta", desc: "Gdy odpadniesz, wskazujesz jedną osobę, która odpada razem z Tobą." },
+    { id: "testament", name: "Testament", desc: "Gdy odpadniesz, prowadzący ujawnia wszystkim rolę jednej wybranej przez Ciebie osoby." },
+    { id: "kneblowanie", name: "Knebel", desc: "Raz w ciągu dnia wskazujesz osobę, która do końca dnia nie może mówić ani głosować." },
+    { id: "przekupstwo", name: "Przekupstwo", desc: "Raz przenosisz głos wybranej osoby na innego kandydata w dziennym głosowaniu." },
+    { id: "detektyw", name: "Detektyw", desc: "Raz w nocy pytasz prowadzącego, czy wybrana osoba ma jakąkolwiek rolę specjalną." },
+    { id: "zamiana", name: "Zamiana miejsc", desc: "Raz w nocy wskazujesz osobę. Jeśli mafia zaatakuje Ciebie, zginie ona zamiast Ciebie." }
+  ];
+  const POWER_BY_ID = Object.fromEntries(POWERS.map(c => [c.id, c]));
+
+  // Historie są neutralne wobec ról: mafia opowiada swoją tak samo jak mieszkańcy.
+  const STORIES = [
+    { t: "Emerytowany listonosz", d: "Przez 40 lat roznosiłeś listy w tym mieście. Znasz każdą skrzynkę pocztową i wiesz, kto dostaje dziwne paczki." },
+    { t: "Właścicielka piekarni", d: "Wstajesz o 3:00, żeby piec chleb. Widziałaś, kto wraca do domu nad ranem, ale nikomu nie mówiłaś." },
+    { t: "Nowy w mieście", d: "Przyjechałeś tydzień temu z dużego miasta. Nikt nie wie, czym się wcześniej zajmowałeś, a Ty nie lubisz o tym mówić." },
+    { t: "Lokalny hydraulik", d: "Byłeś w piwnicy prawie każdego domu. W jednej z nich znalazłeś coś, czego nie powinieneś był zobaczyć." },
+    { t: "Proboszcz parafii", d: "Słuchasz spowiedzi całego miasta. Tajemnica spowiedzi coraz bardziej Ci ciąży." },
+    { t: "Nauczycielka matematyki", d: "Uczyłaś połowę osób przy tym stole. Pamiętasz, kto ściągał na klasówkach." },
+    { t: "Barman z Pod Kogutem", d: "Nalewasz piwo od 20 lat. Ludzie po trzecim kuflu mówią Ci rzeczy, których nie powiedzieliby nikomu." },
+    { t: "Wnuczka burmistrza", d: "Wróciłaś ze studiów za granicą. Plotki mówią, że dziadek ma długi u niewłaściwych ludzi." },
+    { t: "Taksówkarz na nocnej zmianie", d: "Wozisz ludzi po nocach i nie zadajesz pytań. Ostatnio jeden kurs skończył się pod opuszczonym magazynem." },
+    { t: "Fryzjerka", d: "W Twoim salonie plotki krążą szybciej niż nożyczki. Wiesz, kto z kim się pokłócił w tym tygodniu." },
+    { t: "Weterynarz", d: "Leczysz psy i koty całego miasta. Wczoraj ktoś przyniósł psa z raną, która nie wyglądała na ugryzienie." },
+    { t: "Były bokser", d: "Kiedyś walczyłeś o mistrzostwo województwa. Teraz prowadzisz siłownię i spłacasz pożyczkę, o której wolisz nie mówić." },
+    { t: "Kwiaciarka", d: "Ktoś co tydzień zamawia u Ciebie wieniec pogrzebowy, zawsze dzień przed czyimś zniknięciem." },
+    { t: "Dziennikarz lokalnej gazety", d: "Od miesięcy piszesz artykuł o korupcji w mieście. Ktoś włamał się do Twojego biura i zabrał notatki." },
+    { t: "Ogrodnik z willi na wzgórzu", d: "Pracujesz dla najbogatszej rodziny w okolicy. Pod różami zakopano coś, co nie jest kompostem." },
+    { t: "Pielęgniarka z przychodni", d: "Masz dostęp do szafki z lekami. W zeszłym tygodniu kilku opakowań zabrakło, a Ty nie zgłosiłaś tego szefowi." },
+    { t: "Sprzedawca używanych aut", d: "Każde auto ma swoją historię. Jedno, które sprzedałeś miesiąc temu, miało w bagażniku dziurę po kuli." },
+    { t: "Organistka", d: "Grasz na każdym ślubie i pogrzebie. Ostatnio pogrzebów jest więcej niż ślubów i zaczyna Cię to niepokoić." },
+    { t: "Kierowca autobusu", d: "Codziennie tą samą trasą. Od tygodnia na przystanku przy cmentarzu wsiada ten sam człowiek w kapeluszu." },
+    { t: "Wędkarz z jeziora", d: "Spędzasz noce nad wodą. Trzy dni temu ktoś o północy wrzucił do jeziora ciężką torbę." },
+    { t: "Właściciel lombardu", d: "Ludzie przynoszą Ci rzeczy i nie pytasz, skąd je mają. Wczoraj ktoś zastawił zegarek z wygrawerowanym nazwiskiem zaginionego." },
+    { t: "Sołtyska", d: "Znasz wszystkich i wszystkich pilnujesz. Ostatnio ktoś podrzucił Ci anonim z groźbą." },
+    { t: "Student na wakacjach", d: "Przyjechałeś do babci na lato i miało być nudno. Wczoraj w nocy obudził Cię strzał gdzieś za lasem." },
+    { t: "Kucharz w szkolnej stołówce", d: "Gotujesz dla dzieci i nauczycieli. Ktoś regularnie zamawia u Ciebie dziesięć obiadów na wynos do starego młyna." },
+    { t: "Zegarmistrz", d: "Naprawiasz zegary od 30 lat. Każdy w mieście ma u Ciebie coś w naprawie, a Ty znasz ich rozkład dnia co do minuty." },
+    { t: "Instruktorka jazdy", d: "Uczyłaś jeździć połowę miasta. Jedna z Twoich kursantek nagle kupiła drogie auto za gotówkę." },
+    { t: "Strażak ochotnik", d: "Gasiłeś ostatni pożar stodoły. Wszyscy mówili, że to zwarcie, ale Ty czułeś zapach benzyny." },
+    { t: "Antykwariusz", d: "Handlujesz starociami. Ktoś zaoferował Ci obraz, który według katalogu wisi w muzeum w Krakowie." },
+    { t: "Pszczelarz", d: "Twoje ule stoją na skraju lasu. Pszczoły od tygodnia omijają jedną polanę i nie wiesz dlaczego." },
+    { t: "Listonoszka na zastępstwie", d: "Rozwozisz pocztę od miesiąca. Jedna koperta bez nadawcy wraca do Ciebie codziennie, choć adres jest prawidłowy." },
+    { t: "Aptekarz", d: "Wydajesz leki całemu miastu. Ktoś od miesiąca wykupuje duże ilości środków nasennych na receptę lekarza, który nie żyje od roku." },
+    { t: "Kościelna", d: "Masz klucze do kościoła i dzwonnicy. Wczoraj wieczorem drzwi do krypty były otwarte, choć zamykałaś je osobiście." },
+    { t: "Komornik", d: "Zajmujesz ludziom majątek i nikt Cię nie lubi. Ostatnio jedna z egzekucji została nagle spłacona w całości gotówką." },
+    { t: "Mechanik samochodowy", d: "Naprawiasz auta w warsztacie przy trasie. Ktoś przyprowadził samochód z wgniecionym zderzakiem i zapłacił podwójnie za dyskrecję." },
+    { t: "Bibliotekarka", d: "Wiesz, kto co wypożycza. Ktoś od tygodnia czyta wyłącznie książki o truciznach i za każdym razem oddaje je przed terminem." },
+    { t: "Grabarz", d: "Kopiesz groby od 25 lat. Ostatnio ktoś zamówił pogrzeb, zanim w mieście ktokolwiek umarł." },
+    { t: "Sklepikarka z osiedlowego", d: "Prowadzisz jedyny sklep czynny do 22:00. Wiesz, kto kupuje wódkę, a kto nagle zaczął płacić banknotami po 200 zł." },
+    { t: "Kominiarz", d: "Chodzisz po dachach całego miasta. Przez jedno okno na strychu widziałeś coś, co wyglądało jak magazyn broni." },
+    { t: "Leśniczy", d: "Pilnujesz lasu za miastem. Od miesiąca ktoś jeździ nocą terenówką po drodze, która formalnie jest zamknięta." },
+    { t: "Kelnerka w restauracji Pod Lipami", d: "Obsługujesz najważniejsze stoliki w mieście. Słyszałaś rozmowę, w której padło nazwisko jednej z osób przy tym stole." },
+    { t: "Policjant na emeryturze", d: "Odszedłeś ze służby po aferze, o której nikt nie chce mówić. Nadal masz znajomości na komendzie." },
+    { t: "Organizatorka wesel", d: "Planujesz każdą imprezę w okolicy. Na ostatnim weselu pan młody zniknął na godzinę i wrócił w innej koszuli." },
+    { t: "Hodowca gołębi", d: "Twoje gołębie latają nad całym miastem. Jeden z nich wrócił ostatnio z karteczką, której nie napisałeś." },
+    { t: "Elektryk", d: "Podłączałeś prąd w połowie domów. W jednym z nich licznik kręci się tak, jakby w piwnicy działała fabryka." },
+    { t: "Akuszerka", d: "Odebrałaś poród prawie każdej osoby w tym mieście. Znasz sekrety rodzin, o których one same nie wiedzą." },
+    { t: "Sprzedawca lodów", d: "Jeździsz furgonetką z lodami po całym mieście. Dzieci mówią Ci wszystko, także to, co widziały w nocy przez okno." },
+    { t: "Notariuszka", d: "Spisujesz testamenty. W zeszłym tygodniu trzy osoby zmieniły swoje testamenty, każda na korzyść tego samego człowieka." },
+    { t: "Kowal", d: "Twoja kuźnia stoi tu od czterech pokoleń. Ktoś zamówił u Ciebie klucz do zamka, którego nie powinien mieć." },
+    { t: "Didżej z remizy", d: "Puszczasz muzykę na każdej sobotniej potańcówce. Widzisz z konsoli, kto z kim wychodzi i o której wraca." },
+    { t: "Konduktorka w pociągu", d: "Codziennie kursujesz między miastem a stolicą. Jeden pasażer zawsze jedzie bez biletu i zawsze płaci mandat w euro." },
+    { t: "Rybak", d: "Masz łódź na jeziorze i sieci rozstawione przy wyspie. Ostatnio w sieci złapałeś telefon, który wciąż dzwonił." },
+    { t: "Krawcowa", d: "Szyjesz garnitury i suknie. Ktoś zamówił płaszcz z kieszenią, w której zmieści się coś dokładnie wielkości pistoletu." },
+    { t: "Prezes klubu piłkarskiego", d: "Twój klub gra w lidze okręgowej i nagle dostał hojnego sponsora. Nie pytałeś, skąd są pieniądze." },
+    { t: "Malarka pejzaży", d: "Malujesz w plenerze, często o świcie. Na jednym z Twoich obrazów przypadkiem uwieczniłaś coś, czego nikt nie miał zobaczyć." },
+    { t: "Ratownik nad jeziorem", d: "Pilnujesz plaży całe lato. Ktoś wypłynął w nocy łódką i wrócił sam, choć odpływało dwoje." },
+    { t: "Właścicielka pensjonatu", d: "Wynajmujesz pokoje przyjezdnym. Gość spod siódemki płaci z góry, nie wychodzi za dnia i ma trzy paszporty." },
+    { t: "Magazynier w hurtowni", d: "Rozładowujesz dostawy. Jedna ciężarówka przyjeżdża zawsze w czwartek o 2:00 i nigdy nie ma jej w papierach." },
+    { t: "Radny gminy", d: "Głosujesz nad budżetem miasta. Ktoś zaproponował Ci kopertę za poparcie przetargu na nową drogę." },
+    { t: "Wróżka z jarmarku", d: "Stawiasz tarota turystom. Wczoraj trzy razy z rzędu wyciągnęłaś kartę Śmierci dla tej samej osoby." },
+    { t: "Treserka psów", d: "Szkolisz psy obronne. Ktoś zamówił u Ciebie psa, który ma reagować tylko na jedno słowo: „teraz”." },
+    { t: "Ksiądz wikary", d: "Przyjechałeś do parafii pół roku temu. Proboszcz wysyła Cię na dziwne nocne wizyty i nie mówi, po co." },
+    { t: "Sędzia sportowy", d: "Sędziujesz mecze w okolicy. Przed ostatnim meczem ktoś zostawił Ci w szatni kopertę i kartkę z wynikiem." },
+    { t: "Sprzątaczka w ratuszu", d: "Sprzątasz gabinety po godzinach. W koszu burmistrza znalazłaś podarty list z groźbami." },
+    { t: "Producent bimbru", d: "Masz w szopie aparaturę, o której wszyscy wiedzą i nikt nie mówi. Ostatnio ktoś zamówił u Ciebie sto litrów naraz." },
+    { t: "Fotograf ślubny", d: "Robisz zdjęcia na wszystkich uroczystościach. Na jednym ujęciu w tle widać dwie osoby, które przysięgały, że się nie znają." },
+    { t: "Uzdrowicielka ziołami", d: "Ludzie przychodzą do Ciebie po zioła na wszystko. Ktoś zapytał, które z nich są śmiertelne w małej dawce." },
+    { t: "Dróżnik na przejeździe", d: "Opuszczasz szlaban od 30 lat. Pewnej nocy przez przejazd przejechał pociąg, którego nie było w rozkładzie." },
+    { t: "Pracownica poczty", d: "Siedzisz w okienku i przyjmujesz paczki. Ktoś co tydzień nadaje ciężką paczkę na adres, który nie istnieje." },
+    { t: "Zawodowy pokerzysta", d: "Wróciłeś do rodzinnego miasta po latach w kasynach. Komuś jesteś winien dużo pieniędzy i ten ktoś też tu przyjechał." },
+    { t: "Weterynarka koni", d: "Jeździsz po stadninach w okolicy. Najdroższy koń w powiecie padł nagle, a właściciel zakazał sekcji." },
+    { t: "Sprzedawca na targu", d: "Handlujesz warzywami co sobotę. Jeden klient zawsze płaci za wszystko i zawsze prosi o gazetę do zawinięcia." },
+    { t: "Archiwistka w urzędzie", d: "Pilnujesz starych dokumentów. Ktoś wypożyczył akta jednej działki i oddał je bez trzech stron." },
+    { t: "Kierowca karetki", d: "Jeździsz na wezwania w dzień i w nocy. Ostatnie wezwanie było fałszywe, a pod adresem czekał ktoś z bronią." },
+    { t: "Właściciel kina", d: "Prowadzisz jedyne kino w okolicy. Na seansach o 22:00 zawsze siedzi ta sama osoba, w tym samym rzędzie, i nigdy nie patrzy na ekran." },
+    { t: "Opiekunka do dzieci", d: "Pilnujesz dzieci najbogatszych rodzin. Słyszysz rozmowy, które rodzice prowadzą, myśląc, że nikt nie słucha." },
+    { t: "Stolarz", d: "Robisz meble na zamówienie. Ktoś zamówił szafę z podwójnym dnem i zapłacił za milczenie." },
+    { t: "Przewodniczka po zamku", d: "Oprowadzasz turystów po ruinach. Odkryłaś tajne przejście, którego nie ma na żadnej mapie, i ktoś z niego korzysta." },
+    { t: "Dzwonnik", d: "Dzwonisz na każdą mszę i każdy pogrzeb. Z wieży widać całe miasto, także to, co dzieje się na tyłach domów." },
+    { t: "Szef ochotniczej orkiestry", d: "Prowadzisz orkiestrę dętą. Jeden z muzyków ostatnio przestał przychodzić na próby, ale jego futerał wciąż stoi w remizie." },
+    { t: "Sprzedawczyni losów", d: "Sprzedajesz zdrapki i losy. Ten sam człowiek wygrał trzy razy w miesiącu i nigdy się z tego nie cieszy." },
+    { t: "Geodeta", d: "Mierzysz działki pod nowe inwestycje. Na jednej z nich teodolit pokazał wykop, którego nikt nie zgłaszał." },
+    { t: "Stróż nocny w fabryce", d: "Pilnujesz zamkniętej fabryki. Od tygodnia w nocy słychać tam maszyny, choć zakład nie działa od 10 lat." },
+    { t: "Babcia z ławki pod blokiem", d: "Siedzisz na ławce od rana do wieczora. Wiesz, kto o której wychodzi i z kim wraca. Nikt Cię nie docenia." },
+    { t: "Trener szkolnej drużyny", d: "Prowadzisz treningi piłki ręcznej. Jeden z rodziców zaproponował Ci pieniądze za to, żebyś zabrał drużynę na wyjazd w konkretny weekend." },
+    { t: "Doradczyni bankowa", d: "Prowadzisz kredyty w lokalnym oddziale. Ktoś spłacił kredyt hipoteczny walizką gotówki i poprosił, żebyś o tym zapomniała." },
+    { t: "Sadownik", d: "Masz największy sad w gminie. W nocy ktoś przechodzi przez Twój sad na skróty i zostawia ślady butów w rozmiarze 47." },
+    { t: "Dentystka", d: "Leczysz zęby połowie miasta. Jeden z pacjentów miał w plombie coś, co wyglądało na mikroskopijny nadajnik." },
+    { t: "Kierownik zespołu disco polo", d: "Grasz na weselach w całym województwie. Na ostatnim weselu ktoś poprosił o piosenkę, która była umówionym sygnałem." },
+    { t: "Pracownik oczyszczalni ścieków", d: "Widzisz, co miasto wyrzuca. Ostatnio w osadniku znalazłeś rzeczy, których nikt normalny by nie spłukał." },
+    { t: "Ekspedientka w butiku", d: "Sprzedajesz drogie ubrania. Ktoś kupił u Ciebie trzy identyczne czarne płaszcze i zapłacił gotówką." },
+    { t: "Kucharz w barze mlecznym", d: "Gotujesz pierogi od świtu. Stały klient przestał przychodzić, a jego miejsce zajął ktoś, kto zadaje dużo pytań." },
+    { t: "Inspektorka sanepidu", d: "Kontrolujesz restauracje. W jednej z nich zamrażarka była zamknięta na kłódkę, a właściciel nie chciał jej otworzyć." },
+    { t: "Pilot awionetki", d: "Robisz loty widokowe nad okolicą. Z góry zauważyłeś na polu rzepaku krąg, który nie wygląda na dzieło kosmitów." },
+    { t: "Właścicielka salonu kosmetycznego", d: "Robisz paznokcie i rzęsy. Klientki mówią Ci wszystko, a jedna ostatnio płakała przez całą wizytę i nie chciała powiedzieć dlaczego." },
+    { t: "Szewc", d: "Naprawiasz buty od 40 lat. Ktoś przyniósł buty z błotem z miejsca, gdzie według niego nigdy nie był." },
+    { t: "Pracownik stacji benzynowej", d: "Siedzisz na nocnej zmianie przy trasie. Kamery na stacji od tygodnia przestają działać dokładnie o 3:15." },
+    { t: "Matka sześciorga dzieci", d: "Masz zawsze pełne ręce roboty i nikt nie podejrzewa Cię o nic. Twoje dzieci wiedzą jednak o mieście więcej niż policja." },
+    { t: "Lokalny influencer", d: "Nagrywasz filmiki o życiu w małym mieście. W tle jednego z nich coś się nagrało i od tamtej pory ktoś pisze do Ciebie z anonimowego konta." },
+    { t: "Kierowniczka domu kultury", d: "Organizujesz koła zainteresowań. Na kółko szachowe zapisało się ostatnio pięciu dorosłych mężczyzn, którzy nie umieją grać w szachy." },
+    { t: "Pszczelarka z sąsiedniej wsi", d: "Sprzedajesz miód na targu. Ktoś zamawia u Ciebie słoiki bez etykiet i odbiera je zawsze po zmroku." },
+    { t: "Instruktor strzelectwa", d: "Prowadzisz strzelnicę za miastem. W rejestrze brakuje kilku setek naboi, a Ty wiesz, kto miał wtedy klucz." },
+    { t: "Tłumaczka przysięgła", d: "Tłumaczysz dokumenty z włoskiego. Ostatnio dostałaś do przetłumaczenia list, który brzmiał jak instrukcja." },
+    { t: "Gospodarz z końca wsi", d: "Masz dom najbliżej lasu. W nocy Twoje psy szczekają na coś, czego Ty nie widzisz." },
+    { t: "Zakonnica", d: "Prowadzisz kuchnię dla ubogich przy klasztorze. Jeden z podopiecznych ma dziwnie drogi zegarek." },
+    { t: "Wulkanizator", d: "Wymieniasz opony w sezonie. Klient przyjechał z przebitą oponą, w której tkwiła łuska." },
+    { t: "Prowadząca lokalne radio", d: "Masz poranną audycję z telefonami od słuchaczy. Wczoraj ktoś zadzwonił na antenie i podał godzinę, a potem się rozłączył." },
+    { t: "Lekarz rodzinny", d: "Przyjmujesz pacjentów w przychodni. Ktoś przyszedł z raną, którą nazwał wypadkiem przy rąbaniu drewna, ale to nie była siekiera." },
+    { t: "Sprzątaczka w pensjonacie", d: "Ścielisz łóżka i opróżniasz kosze. W jednym pokoju znalazłaś mapę miasta z zaznaczonymi kilkoma domami." },
+    { t: "Hodowczyni alpak", d: "Twoje alpaki to atrakcja okolicy. Ktoś zaproponował Ci absurdalnie dużo pieniędzy za stodołę na tydzień." },
+    { t: "Kierowca śmieciarki", d: "Jeździsz po mieście, gdy wszyscy śpią. Widzisz, kto wynosi worki o 4:00 rano i co w nich dzwoni." },
+    { t: "Bibliotekarz szkolny", d: "Pilnujesz szkolnej biblioteki. Uczniowie mówią, że w piwnicy szkoły ktoś mieszka." },
+    { t: "Spadkobierczyni starego dworu", d: "Odziedziczyłaś zrujnowany dwór po ciotce, której nigdy nie poznałaś. Notariusz ostrzegł Cię, żebyś nie zaglądała do piwnicy." },
+    { t: "Kontroler biletów", d: "Sprawdzasz bilety w autobusach. Jeden pasażer zawsze ma bilet skasowany w innym mieście tego samego dnia." },
+    { t: "Instruktorka jogi", d: "Prowadzisz zajęcia w sali gimnastycznej. Jedna z uczestniczek nigdy nie zdejmuje rękawiczek." },
+    { t: "Detektyw amator", d: "Czytasz kryminały i rozwiązałeś kiedyś zagadkę zaginionego kota sąsiadki. Od tamtej pory wszyscy przychodzą do Ciebie z problemami." },
+    { t: "Właściciel zakładu pogrzebowego", d: "Interes ostatnio idzie za dobrze. Ktoś zapytał Cię o cenę pięciu trumien naraz i zapłacił zaliczkę." },
+    { t: "Hydrolożka", d: "Badasz wodę w rzece. Próbki z jednego odcinka wykazały coś, czego nie powinno tam być, a ktoś zabrał Ci wyniki." },
+    { t: "Złota rączka", d: "Naprawiasz wszystko u wszystkich. W jednym domu poproszono Cię, żebyś zamurował drzwi do piwnicy i nie pytał dlaczego." },
+    { t: "Organizatorka odpustu", d: "Co roku przygotowujesz odpust parafialny. W tym roku ktoś anonimowo zapłacił za wszystkie stragany." },
+    { t: "Strażnik miejski", d: "Wystawiasz mandaty za złe parkowanie. Jedno auto bez tablic stoi pod ratuszem co noc i nikt nie pozwala Ci go odholować." }
+  ];
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  }
+
+  function suggestedMafia(n) { return Math.max(1, Math.floor(n / 4)); }
+
+  function randInt(max) {
+    const buf = new Uint32Array(1);
+    const limit = Math.floor(0x100000000 / max) * max;
+    let x;
+    do { crypto.getRandomValues(buf); x = buf[0]; } while (x >= limit);
+    return x % max;
+  }
+  function shuffle(arr) {
+    const a = arr.slice();
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = randInt(i + 1);
+      [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a;
+  }
+
+  // Karty i historie nie powtarzają się, dopóki starcza puli. Potem pula jest tasowana od nowa.
+  function drawFrom(pool, n) {
+    const out = [];
+    while (out.length < n) out.push(...shuffle(pool));
+    return out.slice(0, n);
+  }
+
+  // Ustawienia gry: { mafia, medyk, szeryf, mafiaTouched, powersOn, powers, storiesOn }
+  function defaultConfig(saved = {}) {
+    return {
+      mafia: saved.mafia || 1,
+      medyk: saved.medyk ?? true,
+      szeryf: saved.szeryf ?? true,
+      mafiaTouched: saved.mafiaTouched || false,
+      powersOn: saved.powersOn ?? false,
+      storiesOn: saved.storiesOn ?? false,
+      powers: (saved.powers || POWERS.map(c => c.id)).filter(id => POWER_BY_ID[id])
+    };
+  }
+
+  function validate(cfg, n) {
+    const specials = cfg.mafia + (cfg.medyk ? 1 : 0) + (cfg.szeryf ? 1 : 0);
+    if (n < 3) return { ok: false, msg: "Potrzeba co najmniej 3 graczy." };
+    if (specials > n) return { ok: false, msg: `Za dużo ról specjalnych (${specials}) na ${n} graczy.` };
+    if (cfg.mafia * 2 >= n) return { ok: false, msg: "Mafii musi być mniej niż połowa graczy, inaczej wygrywa od razu." };
+    if (cfg.powersOn && !cfg.powers.length) return { ok: false, msg: "Włącz co najmniej jedną kartę mocy albo wyłącz karty mocy." };
+    return { ok: true };
+  }
+
+  // Zwraca [{ role, power, story }] w kolejności graczy.
+  function deal(cfg, n) {
+    const roles = [];
+    for (let i = 0; i < cfg.mafia; i++) roles.push("mafia");
+    if (cfg.medyk) roles.push("medyk");
+    if (cfg.szeryf) roles.push("szeryf");
+    while (roles.length < n) roles.push("town");
+    const shuffled = shuffle(roles);
+    const powers = cfg.powersOn ? drawFrom(cfg.powers, n) : [];
+    const stories = cfg.storiesOn ? drawFrom(STORIES.map((_, i) => i), n) : [];
+    return shuffled.map((role, i) => ({ role, power: powers[i] || null, story: stories[i] ?? null }));
+  }
+
+  // Ustawienia ról, kart mocy i backstory. Wspólne dla obu trybów.
+  function renderConfig(cfg, n) {
+    const town = Math.max(0, n - cfg.mafia - (cfg.medyk ? 1 : 0) - (cfg.szeryf ? 1 : 0));
+    return `
+        <div>
+          <div class="eyebrow">Role</div>
+          <div class="config">
+            <div class="config-row">
+              <span class="label"><span class="dot" style="background:var(--mafia)"></span>Mafia</span>
+              <div class="stepper">
+                <button class="btn-icon" data-act="mafia-dec" aria-label="Mniej mafii" ${cfg.mafia <= 1 ? "disabled" : ""}>−</button>
+                <output id="mafia-count">${cfg.mafia}</output>
+                <button class="btn-icon" data-act="mafia-inc" aria-label="Więcej mafii">+</button>
+              </div>
+            </div>
+            <label class="config-row" for="t-medyk">
+              <span class="label"><span class="dot" style="background:var(--medyk)"></span>Medyk</span>
+              <span class="switch"><input type="checkbox" id="t-medyk" data-act="toggle-medyk" ${cfg.medyk ? "checked" : ""}><span></span></span>
+            </label>
+            <label class="config-row" for="t-szeryf">
+              <span class="label"><span class="dot" style="background:var(--szeryf)"></span>Szeryf</span>
+              <span class="switch"><input type="checkbox" id="t-szeryf" data-act="toggle-szeryf" ${cfg.szeryf ? "checked" : ""}><span></span></span>
+            </label>
+          </div>
+        </div>
+
+        <div>
+          <div class="config">
+            <label class="config-row" for="t-powers">
+              <span class="label"><span class="dot" style="background:var(--power)"></span>Karty mocy</span>
+              <span class="switch"><input type="checkbox" id="t-powers" data-act="toggle-powers" ${cfg.powersOn ? "checked" : ""}><span></span></span>
+            </label>
+          </div>
+          ${cfg.powersOn ? renderPowerList(cfg, n) : ""}
+        </div>
+
+        <div>
+          <div class="config">
+            <label class="config-row" for="t-stories">
+              <span class="label"><span class="dot" style="background:var(--story)"></span>Backstory</span>
+              <span class="switch"><input type="checkbox" id="t-stories" data-act="toggle-stories" ${cfg.storiesOn ? "checked" : ""}><span></span></span>
+            </label>
+          </div>
+          ${cfg.storiesOn ? `<p class="summary" style="padding-top:10px">Każdy gracz losuje jedną z ${STORIES.length} historii i opowiada ją pozostałym pierwszego dnia.</p>` : ""}
+        </div>
+
+        <p class="summary">Pozostali gracze (${town}) to mieszkańcy bez nocnej akcji.${cfg.mafiaTouched ? "" : ` Liczba mafii dobiera się sama: 1 na każde 4 osoby.`}</p>`;
+  }
+
+  function renderPowerList(cfg, n) {
+    const on = new Set(cfg.powers);
+    const rows = POWERS.map(c => `
+      <label class="config-row power-row" for="pc-${c.id}">
+        <span class="label"><span>${c.name}</span><span class="pdesc">${c.desc}</span></span>
+        <span class="switch"><input type="checkbox" id="pc-${c.id}" data-act="toggle-card" data-id="${c.id}" ${on.has(c.id) ? "checked" : ""}><span></span></span>
+      </label>`).join("");
+    const repeat = n > cfg.powers.length && cfg.powers.length
+      ? ` Graczy jest więcej niż kart, więc część kart się powtórzy.` : "";
+    return `
+      <div class="power-bulk">
+        <button data-act="cards-all">Włącz wszystkie</button>
+        <button data-act="cards-none">Wyłącz wszystkie</button>
+      </div>
+      <p class="summary" style="padding-top:10px">Każdy gracz dostaje jedną losową kartę z ${cfg.powers.length} włączonych.${repeat}</p>
+      <div class="config" style="border-top:none">${rows}</div>`;
+  }
+
+  // Obsługuje zdarzenie z ustawień. Zwraca true, jeśli coś zmieniło cfg.
+  function applyConfigAction(cfg, act, el, n) {
+    switch (act) {
+      case "mafia-dec": cfg.mafia = Math.max(1, cfg.mafia - 1); cfg.mafiaTouched = true; return true;
+      case "mafia-inc": cfg.mafia += 1; cfg.mafiaTouched = true; return true;
+      case "toggle-medyk": cfg.medyk = el.checked; return true;
+      case "toggle-szeryf": cfg.szeryf = el.checked; return true;
+      case "toggle-powers": cfg.powersOn = el.checked; return true;
+      case "toggle-stories": cfg.storiesOn = el.checked; return true;
+      case "toggle-card": {
+        const id = el.dataset.id;
+        cfg.powers = el.checked
+          ? POWERS.map(c => c.id).filter(x => x === id || cfg.powers.includes(x))
+          : cfg.powers.filter(x => x !== id);
+        return true;
+      }
+      case "cards-all": cfg.powers = POWERS.map(c => c.id); return true;
+      case "cards-none": cfg.powers = []; return true;
+    }
+    return false;
+  }
+
+  function autoMafia(cfg, n) {
+    if (!cfg.mafiaTouched) cfg.mafia = suggestedMafia(n);
+  }
+
+  // Karta roli, karta mocy i backstory jednego gracza.
+  // a = { name, role, power, story }, partners = imiona reszty mafii lub null,
+  // powerFooter = HTML pod opisem karty mocy (domyślnie przypomnienie o prowadzącym).
+  function renderIdentity(a, partners, powerFooter) {
+    const r = ROLES[a.role];
+    let partnersHtml = "";
+    if (a.role === "mafia" && partners) {
+      partnersHtml = `<div class="partners">${partners.length
+        ? `Twoja mafia: ${partners.map(n => `<strong>${esc(n)}</strong>`).join(", ")}`
+        : "Działasz sam."}</div>`;
+    }
+    const pw = a.power ? POWER_BY_ID[a.power] : null;
+    const st = a.story !== null && a.story !== undefined ? STORIES[a.story] : null;
+    return `
+        <div class="card" style="--role:${r.color}">
+          <span class="for">${esc(a.name)}, Twoja rola to</span>
+          <span style="color:var(--role)">${SIGILS[a.role]}</span>
+          <span class="role-name">${r.name}</span>
+          <p class="desc">${r.desc}</p>
+          ${partnersHtml}
+        </div>
+        ${pw ? `
+        <div class="power-card">
+          <span class="eyebrow">Twoja karta mocy</span>
+          <span class="pname">${pw.name}</span>
+          <p>${pw.desc}</p>
+          ${powerFooter ?? `<p class="note">Działa raz na grę. Gdy chcesz jej użyć, daj znać prowadzącemu.</p>`}
+        </div>` : ""}
+        ${st ? `
+        <div class="story-card">
+          <span class="eyebrow">Twoje backstory</span>
+          <span class="sname">${st.t}</span>
+          <p>${st.d}</p>
+          <p class="note">Pierwszego dnia opowiesz tę historię reszcie graczy. Możesz ją ubarwić własnymi szczegółami.</p>
+        </div>` : ""}`;
+  }
+
+  function confirmBox(text, yesAct) {
+    return `
+      <div class="confirm-box">
+        <p>${text}</p>
+        <div class="row">
+          <button class="btn-ghost" data-act="confirm-no">Anuluj</button>
+          <button class="btn-primary" data-act="${yesAct}" style="font-size:1rem;padding:12px">Tak</button>
+        </div>
+      </div>`;
+  }
+
+  let wakeLock = null;
+  async function keepAwake() {
+    try { if ("wakeLock" in navigator && !wakeLock) wakeLock = await navigator.wakeLock.request("screen"); } catch {}
+  }
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && wakeLock) { wakeLock = null; keepAwake(); }
+  });
+
+  window.Mafia = {
+    ROLES, SIGILS, POWERS, POWER_BY_ID, STORIES,
+    esc, shuffle, drawFrom, suggestedMafia, defaultConfig, validate, deal,
+    renderConfig, applyConfigAction, autoMafia, renderIdentity, confirmBox, keepAwake
+  };
+})();
