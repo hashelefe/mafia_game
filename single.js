@@ -1,0 +1,226 @@
+// Tryb jednego telefonu: imiona, losowanie i podawanie telefonu po kolei.
+(() => {
+  const { ROLES, POWER_BY_ID, STORIES, esc, defaultConfig, validate, deal, renderConfig,
+          applyConfigAction, autoMafia, renderIdentity, confirmBox, keepAwake } = window.Mafia;
+
+  // Link do trybu online. Na stronie GitHub Pages wystarcza ścieżka względna.
+  const ONLINE_URL = "online.html";
+
+  const STORE_KEY = "mafia-roles-v1";
+  const app = document.getElementById("app");
+
+  const saved = load();
+  const state = {
+    players: saved.players || [],
+    cfg: defaultConfig(saved),
+    assignment: null,   // [{ name, role, power, story }]
+    index: 0,
+    phase: "setup",     // setup | handoff | reveal | done
+    confirm: null,
+    showRoster: false
+  };
+
+  function load() {
+    try { return JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch { return {}; }
+  }
+  function save() {
+    try { localStorage.setItem(STORE_KEY, JSON.stringify({ players: state.players, ...state.cfg })); } catch {}
+  }
+
+  function startDeal() {
+    const dealt = deal(state.cfg, state.players.length);
+    state.assignment = state.players.map((name, i) => ({ name, ...dealt[i] }));
+    state.index = 0;
+    state.phase = "handoff";
+    state.confirm = null;
+    state.showRoster = false;
+    keepAwake();
+  }
+
+  function addPlayer(raw) {
+    const name = raw.trim().replace(/\s+/g, " ");
+    if (!name) return "";
+    if (state.players.some(p => p.toLowerCase() === name.toLowerCase())) return `${name} już jest na liście.`;
+    state.players.push(name);
+    autoMafia(state.cfg, state.players.length);
+    save();
+    return "";
+  }
+
+  // ---------- Render ----------
+  let lastPhase = null;
+  function render(focusInput) {
+    const fn = { setup: renderSetup, handoff: renderHandoff, reveal: renderReveal, done: renderDone }[state.phase];
+    app.innerHTML = fn();
+    if (focusInput) {
+      const inp = document.getElementById("name-input");
+      if (inp) inp.focus();
+    }
+    if (state.phase !== lastPhase || state.phase !== "setup") window.scrollTo(0, 0);
+    lastPhase = state.phase;
+  }
+
+  function renderSetup() {
+    const n = state.players.length;
+    const v = validate(state.cfg, n);
+    const list = n
+      ? state.players.map((p, i) => `
+          <li>
+            <span class="num">${i + 1}.</span>
+            <span class="name">${esc(p)}</span>
+            <button class="btn-remove" data-act="remove" data-i="${i}" aria-label="Usuń ${esc(p)}">×</button>
+          </li>`).join("")
+      : `<li class="empty">Nikogo jeszcze nie ma. Wpisz imiona w kolejności, w jakiej będziecie podawać telefon.</li>`;
+
+    return `
+      <section class="screen">
+        <div>
+          <div class="eyebrow">Mafia · jeden telefon</div>
+          <h1>Losowanie ról</h1>
+        </div>
+        <a class="mode-link" href="${ONLINE_URL}">Każdy na swoim telefonie? Załóż lobby online →</a>
+
+        <form class="add-row" id="add-form" autocomplete="off">
+          <input id="name-input" type="text" placeholder="Imię gracza" maxlength="24" enterkeyhint="done" aria-label="Imię gracza">
+          <button type="submit">Dodaj</button>
+        </form>
+        <p class="warn" id="add-err" hidden></p>
+
+        <div>
+          <div class="eyebrow">Gracze (${n})</div>
+          <ul class="players">${list}</ul>
+        </div>
+
+        ${renderConfig(state.cfg, n)}
+        ${v.ok ? "" : `<p class="warn">${v.msg}</p>`}
+
+        <div class="spacer"></div>
+        <div class="actions">
+          <button class="btn-primary" data-act="deal" ${v.ok ? "" : "disabled"}>Losuj role</button>
+          ${n ? `<button class="btn-ghost" data-act="clear">Wyczyść listę</button>` : ""}
+          ${state.confirm === "clear" ? confirmBox("Usunąć wszystkich graczy z listy?", "clear-yes") : ""}
+        </div>
+      </section>`;
+  }
+
+  function progress() {
+    const total = state.assignment.length;
+    return `
+      <div style="width:100%;display:flex;flex-direction:column;gap:8px">
+        <div class="progress">Gracz ${state.index + 1} z ${total}</div>
+        <div class="progress-bar"><div style="width:${(state.index / total) * 100}%"></div></div>
+      </div>`;
+  }
+
+  function renderHandoff() {
+    const p = state.assignment[state.index];
+    return `
+      <section class="screen handoff">
+        ${progress()}
+        <div class="spacer"></div>
+        <p class="muted">Podaj telefon do</p>
+        <div class="who">${esc(p.name)}</div>
+        <p class="muted">Upewnij się, że nikt inny nie patrzy na ekran.</p>
+        <div class="spacer"></div>
+        <div class="actions" style="width:100%">
+          <button class="btn-primary" data-act="show">Jestem ${esc(p.name)}, pokaż rolę</button>
+          <button class="btn-ghost" data-act="abort">Przerwij grę</button>
+          ${state.confirm === "abort" ? confirmBox("Przerwać? Role trzeba będzie wylosować od nowa.", "abort-yes") : ""}
+        </div>
+      </section>`;
+  }
+
+  function renderReveal() {
+    const p = state.assignment[state.index];
+    const partners = state.assignment.filter(a => a.role === "mafia" && a.name !== p.name).map(a => a.name);
+    const last = state.index === state.assignment.length - 1;
+    return `
+      <section class="screen">
+        ${progress()}
+        ${renderIdentity(p, partners)}
+        <div class="spacer"></div>
+        <button class="btn-primary" data-act="hide">${last ? "Zapamiętane, zakończ" : "Zapamiętane, ukryj i podaj dalej"}</button>
+      </section>`;
+  }
+
+  function renderDone() {
+    const roster = state.assignment.map(a => {
+      const r = ROLES[a.role];
+      const pw = a.power ? `<span class="p">${POWER_BY_ID[a.power].name}</span>` : "";
+      const st = a.story !== null ? `<span class="s">${STORIES[a.story].t}</span>` : "";
+      return `<li><span>${esc(a.name)}${pw}${st}</span><span class="r" style="color:${r.color}">${r.name}</span></li>`;
+    }).join("");
+    return `
+      <section class="screen">
+        <div>
+          <div class="eyebrow">Wszyscy znają role</div>
+          <h2>Miasto zasypia</h2>
+        </div>
+        <p class="muted">Oddajcie telefon prowadzącemu. Tylko prowadzący może zajrzeć do listy ról.</p>
+        ${state.assignment.some(x => x.story !== null) ? `<p>Pierwszego dnia każdy po kolei opowiada swoje backstory.</p>` : ""}
+        ${state.showRoster
+          ? `<ul class="roster">${roster}</ul>
+             <button class="btn-ghost" data-act="hide-roster">Ukryj listę</button>`
+          : `<button class="btn-ghost" data-act="show-roster">Pokaż role (tylko prowadzący)</button>
+             ${state.confirm === "roster" ? confirmBox("Na pewno jesteś prowadzącym? Lista pokaże role wszystkich graczy.", "roster-yes") : ""}`}
+        <div class="spacer"></div>
+        <div class="actions">
+          <button class="btn-primary" data-act="deal">Nowe losowanie, ci sami gracze</button>
+          <button class="btn-ghost" data-act="to-setup">Zmień graczy lub role</button>
+        </div>
+      </section>`;
+  }
+
+  // ---------- Events ----------
+  app.addEventListener("submit", e => {
+    e.preventDefault();
+    const inp = document.getElementById("name-input");
+    const err = addPlayer(inp.value);
+    render(true);
+    if (err) {
+      const el = document.getElementById("add-err");
+      el.textContent = err;
+      el.hidden = false;
+      document.getElementById("name-input").value = inp.value;
+    }
+  });
+
+  app.addEventListener("change", e => {
+    const act = e.target.dataset.act;
+    if (!act) return;
+    if (applyConfigAction(state.cfg, act, e.target, state.players.length)) { save(); render(); }
+  });
+
+  app.addEventListener("click", e => {
+    const btn = e.target.closest("button[data-act]");
+    if (!btn || btn.disabled) return;
+    const act = btn.dataset.act;
+    if (applyConfigAction(state.cfg, act, btn, state.players.length)) { save(); render(); return; }
+    switch (act) {
+      case "remove":
+        state.players.splice(+btn.dataset.i, 1);
+        autoMafia(state.cfg, state.players.length);
+        break;
+      case "clear": state.confirm = "clear"; break;
+      case "clear-yes": state.players = []; state.cfg.mafia = 1; state.cfg.mafiaTouched = false; state.confirm = null; break;
+      case "deal": if (validate(state.cfg, state.players.length).ok) startDeal(); break;
+      case "show": state.phase = "reveal"; state.confirm = null; break;
+      case "hide":
+        state.index += 1;
+        state.phase = state.index >= state.assignment.length ? "done" : "handoff";
+        break;
+      case "abort": state.confirm = "abort"; break;
+      case "abort-yes": state.phase = "setup"; state.assignment = null; state.confirm = null; break;
+      case "show-roster": state.confirm = "roster"; break;
+      case "roster-yes": state.showRoster = true; state.confirm = null; break;
+      case "hide-roster": state.showRoster = false; break;
+      case "to-setup": state.phase = "setup"; state.assignment = null; state.confirm = null; break;
+      case "confirm-no": state.confirm = null; break;
+      default: return;
+    }
+    save();
+    render();
+  });
+
+  render();
+})();
